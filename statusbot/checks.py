@@ -36,7 +36,10 @@ class NetworkHealthChecker:
         iface_count = self._count_active_non_loopback_interfaces()
 
         level = HealthLevel.OK if not errors else HealthLevel.CRIT
-        summary = f"dns={'ok' if dns_ok else 'fail'}, http={http_ok}/{len(self.settings.network_urls)}"
+        summary = (
+            f"dns={'ok' if dns_ok else 'fail'}, "
+            f"http={http_ok}/{len(self.settings.network_urls)}"
+        )
         details = f"activeIfaces={iface_count}"
         if errors:
             details += f", errors={' | '.join(errors)}"
@@ -97,7 +100,12 @@ class XrayHealthChecker:
 
         status = self._run(["systemctl", "is-active", service_name], timeout)
         if status["timed_out"]:
-            return CheckResult("Xray", HealthLevel.CRIT, "status timeout", "systemctl is-active timed out")
+            return CheckResult(
+                "Xray",
+                HealthLevel.CRIT,
+                "status timeout",
+                "systemctl is-active timed out",
+            )
 
         output = status["output"].strip()
         active = status["code"] == 0 and output == "active"
@@ -106,7 +114,14 @@ class XrayHealthChecker:
             return CheckResult("Xray", HealthLevel.CRIT, "inactive", details)
 
         meta = self._run(
-            ["systemctl", "show", service_name, "--property", "SubState,ActiveEnterTimestamp", "--value"],
+            [
+                "systemctl",
+                "show",
+                service_name,
+                "--property",
+                "SubState,ActiveEnterTimestamp",
+                "--value",
+            ],
             timeout,
         )
         details = meta["output"].replace("\n", ";").strip() if meta["code"] == 0 else "active"
@@ -144,9 +159,24 @@ class SystemHealthChecker:
         disk_level = ThresholdEvaluator.classify(disk, self.settings.threshold_disk_percent)
 
         return [
-            CheckResult("CPU", cpu_level, self._fmt_percent(cpu), f"cpuLoad={self._fmt_percent(cpu)}"),
-            CheckResult("RAM", ram_level, self._fmt_percent(ram), f"used={self._fmt_percent(ram)}"),
-            CheckResult("Disk", disk_level, self._fmt_percent(disk), f"rootUsed={self._fmt_percent(disk)}"),
+            CheckResult(
+                "CPU",
+                cpu_level,
+                self._fmt_percent(cpu),
+                f"cpuLoad={self._fmt_percent(cpu)}",
+            ),
+            CheckResult(
+                "RAM",
+                ram_level,
+                self._fmt_percent(ram),
+                f"used={self._fmt_percent(ram)}",
+            ),
+            CheckResult(
+                "Disk",
+                disk_level,
+                self._fmt_percent(disk),
+                f"rootUsed={self._fmt_percent(disk)}",
+            ),
         ]
 
     def _cpu_percent(self) -> float:

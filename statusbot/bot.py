@@ -42,12 +42,12 @@ class StatusBotApp:
     def run(self) -> None:
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def start_command(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_admin(update):
             return
         await self._safe_reply(update, "Use /status to get VPS status.")
 
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def status_command(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._ensure_admin(update):
             return
         snapshot = await self.monitoring.collect_status()

@@ -45,7 +45,8 @@ class AlertingService:
                     message=f"RECOVERY {check.component} is OK. {check.summary}",
                 )
                 return event, _ComponentState(HealthLevel.OK, previous.last_alert_at)
-            return None, _ComponentState(HealthLevel.OK, previous.last_alert_at if previous else None)
+            previous_alert_at = previous.last_alert_at if previous else None
+            return None, _ComponentState(HealthLevel.OK, previous_alert_at)
 
         should_send = (
             previous is None
@@ -60,11 +61,15 @@ class AlertingService:
             event = AlertEvent(
                 component=check.component,
                 level=check.level,
-                message=f"ALERT {check.component} is {check.level.name}. {check.summary} | {check.details}",
+                message=(
+                    f"ALERT {check.component} is {check.level.name}. "
+                    f"{check.summary} | {check.details}"
+                ),
             )
             return event, _ComponentState(check.level, now)
 
-        return None, _ComponentState(check.level, previous.last_alert_at if previous else now)
+        previous_alert_at = previous.last_alert_at if previous else now
+        return None, _ComponentState(check.level, previous_alert_at)
 
 
 def utcnow() -> datetime:
