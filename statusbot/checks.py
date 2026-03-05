@@ -30,71 +30,118 @@ class NetworkHealthChecker:
     settings: Settings
 
     def check(self) -> CheckResult:
+        probe, errors, warnings = self._collect_probe_data()
+        self._evaluate_http(probe.http_ok, probe.http_failures, errors, warnings)
+        self._evaluate_ping(probe.ping, errors, warnings)
+        level = self._resolve_level(errors, warnings)
+        summary = self._build_summary(probe)
+        details = self._build_details(probe, warnings, errors)
+        return CheckResult("Network", level, summary, details)
+
+    def _collect_probe_data(
+        self,
+    ) -> tuple["NetworkProbeData", list[str], list[str]]:
         errors: list[str] = []
         warnings: list[str] = []
-
         dns_ok = self._check_dns(errors)
         http_ok, http_total, http_failures = self._check_http()
         tcp_ok = self._check_tcp(errors)
         ping = self._check_ping()
         gateway, default_iface = self._default_route()
+        iface_stats = self._read_interface_stats(default_iface) if default_iface else None
+        probe = NetworkProbeData(
+            dns_ok=dns_ok,
+            http_ok=http_ok,
+            http_total=http_total,
+            http_failures=http_failures,
+            tcp_ok=tcp_ok,
+            ping=ping,
+            gateway=gateway,
+            default_iface=default_iface,
+            iface_stats=iface_stats,
+        )
+        return probe, errors, warnings
 
+    def _evaluate_http(
+        self,
+        http_ok: int,
+        http_failures: list[str],
+        errors: list[str],
+        warnings: list[str],
+    ) -> None:
         if http_ok == 0:
             errors.extend(http_failures)
-        elif http_failures:
-            warnings.extend(http_failures)
+            return
+        warnings.extend(http_failures)
 
+    def _evaluate_ping(
+        self,
+        ping: "PingProbeResult",
+        errors: list[str],
+        warnings: list[str],
+    ) -> None:
         if ping.error:
             warnings.append(f"ping({self.settings.network_ping_host}): {ping.error}")
-        else:
-            if ping.loss_percent is not None:
-                if ping.loss_percent >= self.settings.network_ping_crit_loss_percent:
-                    errors.append(f"ping loss {ping.loss_percent:.1f}%")
-                elif ping.loss_percent >= self.settings.network_ping_warn_loss_percent:
-                    warnings.append(f"ping loss {ping.loss_percent:.1f}%")
-            if (
-                ping.avg_ms is not None
-                and ping.avg_ms >= self.settings.network_ping_warn_avg_ms
-            ):
-                warnings.append(f"ping avg {ping.avg_ms:.1f}ms")
+            return
 
-        iface_stats = self._read_interface_stats(default_iface) if default_iface else None
-
-        if errors:
-            level = HealthLevel.CRIT
-        elif warnings:
-            level = HealthLevel.WARN
-        else:
-            level = HealthLevel.OK
-        summary = (
-            f"dns={'ok' if dns_ok else 'fail'}, "
-            f"http={http_ok}/{http_total}, "
-            f"tcp={'ok' if tcp_ok else 'fail'}"
-        )
         if ping.loss_percent is not None:
-            summary += f", pingLoss={ping.loss_percent:.1f}%"
+            if ping.loss_percent >= self.settings.network_ping_crit_loss_percent:
+                errors.append(f"ping loss {ping.loss_percent:.1f}%")
+            elif ping.loss_percent >= self.settings.network_ping_warn_loss_percent:
+                warnings.append(f"ping loss {ping.loss_percent:.1f}%")
 
+        if ping.avg_ms is None:
+            return
+        if ping.avg_ms >= self.settings.network_ping_warn_avg_ms:
+            warnings.append(f"ping avg {ping.avg_ms:.1f}ms")
+
+    def _resolve_level(
+        self,
+        errors: list[str],
+        warnings: list[str],
+    ) -> HealthLevel:
+        if errors:
+            return HealthLevel.CRIT
+        if warnings:
+            return HealthLevel.WARN
+        return HealthLevel.OK
+
+    def _build_summary(self, probe: "NetworkProbeData") -> str:
+        summary = (
+            f"dns={'ok' if probe.dns_ok else 'fail'}, "
+            f"http={probe.http_ok}/{probe.http_total}, "
+            f"tcp={'ok' if probe.tcp_ok else 'fail'}"
+        )
+        if probe.ping.loss_percent is not None:
+            summary += f", pingLoss={probe.ping.loss_percent:.1f}%"
+        return summary
+
+    def _build_details(
+        self,
+        probe: "NetworkProbeData",
+        warnings: list[str],
+        errors: list[str],
+    ) -> str:
         details_parts = [
-            f"defaultIface={default_iface or 'unknown'}",
-            f"defaultGw={gateway or 'unknown'}",
+            f"defaultIface={probe.default_iface or 'unknown'}",
+            f"defaultGw={probe.gateway or 'unknown'}",
         ]
-        if ping.avg_ms is not None:
-            details_parts.append(f"pingAvg={ping.avg_ms:.1f}ms")
-        if iface_stats is not None:
+        if probe.ping.avg_ms is not None:
+            details_parts.append(f"pingAvg={probe.ping.avg_ms:.1f}ms")
+        if probe.iface_stats is not None:
             details_parts.append(
                 "ifaceErrors="
-                f"rx_err {iface_stats['rx_errors']}, "
-                f"tx_err {iface_stats['tx_errors']}, "
-                f"rx_drop {iface_stats['rx_dropped']}, "
-                f"tx_drop {iface_stats['tx_dropped']}"
+                f"rx_err {probe.iface_stats['rx_errors']}, "
+                f"tx_err {probe.iface_stats['tx_errors']}, "
+                f"rx_drop {probe.iface_stats['rx_dropped']}, "
+                f"tx_drop {probe.iface_stats['tx_dropped']}"
             )
         if warnings:
             details_parts.append(f"warn={' | '.join(warnings)}")
         if errors:
             details_parts.append(f"errors={' | '.join(errors)}")
 
-        details = ", ".join(details_parts)
-        return CheckResult("Network", level, summary, details)
+        return ", ".join(details_parts)
 
     def _check_dns(self, errors: list[str]) -> bool:
         try:
@@ -227,6 +274,19 @@ class PingProbeResult:
     loss_percent: float | None = None
     avg_ms: float | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class NetworkProbeData:
+    dns_ok: bool
+    http_ok: int
+    http_total: int
+    http_failures: list[str]
+    tcp_ok: bool
+    ping: PingProbeResult
+    gateway: str | None
+    default_iface: str | None
+    iface_stats: dict[str, int] | None
 
 
 @dataclass
