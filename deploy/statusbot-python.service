@@ -1,0 +1,19 @@
+[Unit]
+Description=StatusBot (Python)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=statusbot
+Group=statusbot
+WorkingDirectory=/opt/statusbot
+EnvironmentFile=/etc/statusbot/statusbot.env
+ExecStart=/opt/statusbot/.venv/bin/statusbot
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
