@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -30,20 +31,69 @@ class NetworkHealthChecker:
 
     def check(self) -> CheckResult:
         errors: list[str] = []
+        warnings: list[str] = []
 
         dns_ok = self._check_dns(errors)
-        http_ok = self._check_http(errors)
-        iface_count = self._count_active_non_loopback_interfaces()
+        http_ok, http_total, http_failures = self._check_http()
+        tcp_ok = self._check_tcp(errors)
+        ping = self._check_ping()
+        gateway, default_iface = self._default_route()
 
-        level = HealthLevel.OK if not errors else HealthLevel.CRIT
+        if http_ok == 0:
+            errors.extend(http_failures)
+        elif http_failures:
+            warnings.extend(http_failures)
+
+        if ping.error:
+            warnings.append(f"ping({self.settings.network_ping_host}): {ping.error}")
+        else:
+            if ping.loss_percent is not None:
+                if ping.loss_percent >= self.settings.network_ping_crit_loss_percent:
+                    errors.append(f"ping loss {ping.loss_percent:.1f}%")
+                elif ping.loss_percent >= self.settings.network_ping_warn_loss_percent:
+                    warnings.append(f"ping loss {ping.loss_percent:.1f}%")
+            if (
+                ping.avg_ms is not None
+                and ping.avg_ms >= self.settings.network_ping_warn_avg_ms
+            ):
+                warnings.append(f"ping avg {ping.avg_ms:.1f}ms")
+
+        iface_stats = self._read_interface_stats(default_iface) if default_iface else None
+
+        if errors:
+            level = HealthLevel.CRIT
+        elif warnings:
+            level = HealthLevel.WARN
+        else:
+            level = HealthLevel.OK
         summary = (
             f"dns={'ok' if dns_ok else 'fail'}, "
-            f"http={http_ok}/{len(self.settings.network_urls)}"
+            f"http={http_ok}/{http_total}, "
+            f"tcp={'ok' if tcp_ok else 'fail'}"
         )
-        details = f"activeIfaces={iface_count}"
-        if errors:
-            details += f", errors={' | '.join(errors)}"
+        if ping.loss_percent is not None:
+            summary += f", pingLoss={ping.loss_percent:.1f}%"
 
+        details_parts = [
+            f"defaultIface={default_iface or 'unknown'}",
+            f"defaultGw={gateway or 'unknown'}",
+        ]
+        if ping.avg_ms is not None:
+            details_parts.append(f"pingAvg={ping.avg_ms:.1f}ms")
+        if iface_stats is not None:
+            details_parts.append(
+                "ifaceErrors="
+                f"rx_err {iface_stats['rx_errors']}, "
+                f"tx_err {iface_stats['tx_errors']}, "
+                f"rx_drop {iface_stats['rx_dropped']}, "
+                f"tx_drop {iface_stats['tx_dropped']}"
+            )
+        if warnings:
+            details_parts.append(f"warn={' | '.join(warnings)}")
+        if errors:
+            details_parts.append(f"errors={' | '.join(errors)}")
+
+        details = ", ".join(details_parts)
         return CheckResult("Network", level, summary, details)
 
     def _check_dns(self, errors: list[str]) -> bool:
@@ -54,10 +104,12 @@ class NetworkHealthChecker:
             errors.append(f"dns({self.settings.network_dns_host}): {ex}")
             return False
 
-    def _check_http(self, errors: list[str]) -> int:
+    def _check_http(self) -> tuple[int, int, list[str]]:
         ok = 0
+        failures: list[str] = []
         timeout = self.settings.network_http_timeout_seconds
-        for url in self.settings.network_urls:
+        urls = self.settings.network_urls
+        for url in urls:
             try:
                 req = urllib.request.Request(url, method="GET")
                 with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -65,29 +117,116 @@ class NetworkHealthChecker:
                     if 200 <= status < 400:
                         ok += 1
                     else:
-                        errors.append(f"http({url}) status={status}")
+                        failures.append(f"http({url}) status={status}")
             except Exception as ex:
-                errors.append(f"http({url}): {ex}")
-        return ok
+                failures.append(f"http({url}): {ex}")
+        return ok, len(urls), failures
 
-    def _count_active_non_loopback_interfaces(self) -> int:
-        net_path = "/sys/class/net"
-        if not os.path.isdir(net_path):
-            return -1
+    def _check_tcp(self, errors: list[str]) -> bool:
+        host = self.settings.network_tcp_host
+        port = self.settings.network_tcp_port
+        timeout = self.settings.network_http_timeout_seconds
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError as ex:
+            errors.append(f"tcp({host}:{port}): {ex}")
+            return False
 
-        count = 0
-        for iface in os.listdir(net_path):
-            if iface == "lo":
-                continue
-            state_path = os.path.join(net_path, iface, "operstate")
+    def _check_ping(self) -> "PingProbeResult":
+        ping_path = shutil.which("ping")
+        if ping_path is None:
+            return PingProbeResult(error="ping not installed")
+
+        cmd = [
+            ping_path,
+            "-c",
+            str(self.settings.network_ping_count),
+            "-W",
+            str(self.settings.network_ping_timeout_seconds),
+            self.settings.network_ping_host,
+        ]
+
+        try:
+            timeout = max(
+                3,
+                self.settings.network_ping_count
+                * self.settings.network_ping_timeout_seconds
+                + 2,
+            )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            output = f"{result.stdout}\n{result.stderr}".strip()
+            loss, avg = self._parse_ping_output(output)
+            if result.returncode != 0 and loss is None:
+                return PingProbeResult(error="ping command failed")
+            return PingProbeResult(loss_percent=loss, avg_ms=avg)
+        except subprocess.TimeoutExpired:
+            return PingProbeResult(error="ping timeout")
+        except OSError as ex:
+            return PingProbeResult(error=str(ex))
+
+    def _parse_ping_output(self, output: str) -> tuple[float | None, float | None]:
+        loss_match = re.search(r"([\d.]+)%\s+packet loss", output)
+        loss = float(loss_match.group(1)) if loss_match else None
+
+        avg = None
+        avg_match = re.search(r"=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+", output)
+        if avg_match:
+            avg = float(avg_match.group(1))
+        else:
+            short_avg_match = re.search(r"=\s*[\d.]+/([\d.]+)/[\d.]+", output)
+            if short_avg_match:
+                avg = float(short_avg_match.group(1))
+
+        return loss, avg
+
+    def _default_route(self) -> tuple[str | None, str | None]:
+        try:
+            result = subprocess.run(
+                ["ip", "route", "show", "default"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except OSError:
+            return None, None
+
+        line = result.stdout.strip().splitlines()
+        if not line:
+            return None, None
+
+        match = re.search(r"default via (\S+) dev (\S+)", line[0])
+        if not match:
+            return None, None
+        return match.group(1), match.group(2)
+
+    def _read_interface_stats(self, iface: str) -> dict[str, int] | None:
+        stats_path = f"/sys/class/net/{iface}/statistics"
+        if not os.path.isdir(stats_path):
+            return None
+        result: dict[str, int] = {}
+        fields = ("rx_errors", "tx_errors", "rx_dropped", "tx_dropped")
+        for field in fields:
             try:
-                with open(state_path, "r", encoding="utf-8") as f:
-                    state = f.read().strip().lower()
-                if state == "up":
-                    count += 1
-            except OSError:
-                continue
-        return count
+                with open(f"{stats_path}/{field}", "r", encoding="utf-8") as file:
+                    result[field] = int(file.read().strip())
+            except (OSError, ValueError):
+                return None
+        return result
+
+
+@dataclass(frozen=True)
+class PingProbeResult:
+    loss_percent: float | None = None
+    avg_ms: float | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -119,14 +258,33 @@ class XrayHealthChecker:
                 "show",
                 service_name,
                 "--property",
-                "SubState,ActiveEnterTimestamp",
+                "SubState,ActiveEnterTimestamp,NRestarts",
                 "--value",
             ],
             timeout,
         )
-        details = meta["output"].replace("\n", ";").strip() if meta["code"] == 0 else "active"
-        details = details or "active"
-        return CheckResult("Xray", HealthLevel.OK, "active", details)
+        if meta["code"] != 0:
+            return CheckResult("Xray", HealthLevel.OK, "active", "active")
+
+        lines = [line.strip() for line in str(meta["output"]).splitlines()]
+        sub_state = lines[0] if len(lines) > 0 and lines[0] else "active"
+        active_since = lines[1] if len(lines) > 1 and lines[1] else "unknown"
+        restart_count = self._parse_int(lines[2]) if len(lines) > 2 else 0
+
+        if restart_count >= self.settings.xray_restart_warn_count > 0:
+            return CheckResult(
+                "Xray",
+                HealthLevel.WARN,
+                f"active, restarts={restart_count}",
+                f"subState={sub_state}; since={active_since}",
+            )
+
+        return CheckResult(
+            "Xray",
+            HealthLevel.OK,
+            "active",
+            f"subState={sub_state}; since={active_since}; restarts={restart_count}",
+        )
 
     def _run(self, command: list[str], timeout_seconds: int) -> dict[str, object]:
         try:
@@ -143,6 +301,12 @@ class XrayHealthChecker:
             return {"code": -1, "output": "timeout", "timed_out": True}
         except Exception as ex:
             return {"code": -1, "output": str(ex), "timed_out": False}
+
+    def _parse_int(self, value: str) -> int:
+        try:
+            return int(value)
+        except ValueError:
+            return 0
 
 
 @dataclass
