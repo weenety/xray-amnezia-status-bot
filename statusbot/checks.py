@@ -12,6 +12,22 @@ from dataclasses import dataclass
 from .config import Settings
 from .models import CheckResult, HealthLevel
 
+DEFAULT_NETWORK_DNS_HOST = "google.com"
+DEFAULT_NETWORK_URLS = [
+    "https://www.google.com/generate_204",
+    "https://cp.cloudflare.com/generate_204",
+]
+DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS = 5
+DEFAULT_NETWORK_TCP_HOST = "1.1.1.1"
+DEFAULT_NETWORK_TCP_PORT = 443
+DEFAULT_NETWORK_PING_HOST = "1.1.1.1"
+DEFAULT_NETWORK_PING_COUNT = 4
+DEFAULT_NETWORK_PING_TIMEOUT_SECONDS = 3
+DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT = 5.0
+DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT = 20.0
+DEFAULT_NETWORK_PING_WARN_AVG_MS = 250.0
+DEFAULT_XRAY_RESTART_WARN_COUNT = 3
+
 
 class ThresholdEvaluator:
     @staticmethod
@@ -81,18 +97,18 @@ class NetworkHealthChecker:
         warnings: list[str],
     ) -> None:
         if ping.error:
-            warnings.append(f"ping({self.settings.network_ping_host}): {ping.error}")
+            warnings.append(f"ping({DEFAULT_NETWORK_PING_HOST}): {ping.error}")
             return
 
         if ping.loss_percent is not None:
-            if ping.loss_percent >= self.settings.network_ping_crit_loss_percent:
+            if ping.loss_percent >= DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT:
                 errors.append(f"ping loss {ping.loss_percent:.1f}%")
-            elif ping.loss_percent >= self.settings.network_ping_warn_loss_percent:
+            elif ping.loss_percent >= DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT:
                 warnings.append(f"ping loss {ping.loss_percent:.1f}%")
 
         if ping.avg_ms is None:
             return
-        if ping.avg_ms >= self.settings.network_ping_warn_avg_ms:
+        if ping.avg_ms >= DEFAULT_NETWORK_PING_WARN_AVG_MS:
             warnings.append(f"ping avg {ping.avg_ms:.1f}ms")
 
     def _resolve_level(
@@ -145,17 +161,17 @@ class NetworkHealthChecker:
 
     def _check_dns(self, errors: list[str]) -> bool:
         try:
-            socket.getaddrinfo(self.settings.network_dns_host, None)
+            socket.getaddrinfo(DEFAULT_NETWORK_DNS_HOST, None)
             return True
         except Exception as ex:
-            errors.append(f"dns({self.settings.network_dns_host}): {ex}")
+            errors.append(f"dns({DEFAULT_NETWORK_DNS_HOST}): {ex}")
             return False
 
     def _check_http(self) -> tuple[int, int, list[str]]:
         ok = 0
         failures: list[str] = []
-        timeout = self.settings.network_http_timeout_seconds
-        urls = self.settings.network_urls
+        timeout = DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS
+        urls = DEFAULT_NETWORK_URLS
         for url in urls:
             try:
                 req = urllib.request.Request(url, method="GET")
@@ -170,9 +186,9 @@ class NetworkHealthChecker:
         return ok, len(urls), failures
 
     def _check_tcp(self, errors: list[str]) -> bool:
-        host = self.settings.network_tcp_host
-        port = self.settings.network_tcp_port
-        timeout = self.settings.network_http_timeout_seconds
+        host = DEFAULT_NETWORK_TCP_HOST
+        port = DEFAULT_NETWORK_TCP_PORT
+        timeout = DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS
         try:
             with socket.create_connection((host, port), timeout=timeout):
                 return True
@@ -188,17 +204,17 @@ class NetworkHealthChecker:
         cmd = [
             ping_path,
             "-c",
-            str(self.settings.network_ping_count),
+            str(DEFAULT_NETWORK_PING_COUNT),
             "-W",
-            str(self.settings.network_ping_timeout_seconds),
-            self.settings.network_ping_host,
+            str(DEFAULT_NETWORK_PING_TIMEOUT_SECONDS),
+            DEFAULT_NETWORK_PING_HOST,
         ]
 
         try:
             timeout = max(
                 3,
-                self.settings.network_ping_count
-                * self.settings.network_ping_timeout_seconds
+                DEFAULT_NETWORK_PING_COUNT
+                * DEFAULT_NETWORK_PING_TIMEOUT_SECONDS
                 + 2,
             )
             result = subprocess.run(
@@ -331,7 +347,7 @@ class XrayHealthChecker:
         active_since = lines[1] if len(lines) > 1 and lines[1] else "unknown"
         restart_count = self._parse_int(lines[2]) if len(lines) > 2 else 0
 
-        if restart_count >= self.settings.xray_restart_warn_count > 0:
+        if restart_count >= DEFAULT_XRAY_RESTART_WARN_COUNT > 0:
             return CheckResult(
                 "Xray",
                 HealthLevel.WARN,
