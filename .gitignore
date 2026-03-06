@@ -1,10 +1,12 @@
-.venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.log
-.idea/
-dist/
+.gradle/
+build/
+out/
 
+.idea/
 *.iml
+
+*.log
+*.tmp
+
+.venv/
+dist/

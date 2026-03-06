@@ -1,0 +1,533 @@
+package statusbot
+
+import java.io.File
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.time.Duration
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+
+private const val DEFAULT_NETWORK_DNS_HOST = "google.com"
+private val DEFAULT_NETWORK_URLS = listOf(
+    "https://www.google.com/generate_204",
+    "https://cp.cloudflare.com/generate_204",
+)
+private const val DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS = 5
+private const val DEFAULT_NETWORK_TCP_HOST = "1.1.1.1"
+private const val DEFAULT_NETWORK_TCP_PORT = 443
+private const val DEFAULT_NETWORK_PING_HOST = "1.1.1.1"
+private const val DEFAULT_NETWORK_PING_COUNT = 4
+private const val DEFAULT_NETWORK_PING_TIMEOUT_SECONDS = 3
+private const val DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT = 5.0
+private const val DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT = 20.0
+private const val DEFAULT_NETWORK_PING_WARN_AVG_MS = 250.0
+private const val DEFAULT_XRAY_RESTART_WARN_COUNT = 3
+
+object ThresholdEvaluator {
+    fun classify(valuePercent: Double, criticalPercent: Double): HealthLevel {
+        if (valuePercent < 0) {
+            return HealthLevel.WARN
+        }
+        if (valuePercent >= criticalPercent) {
+            return HealthLevel.CRIT
+        }
+        if (valuePercent >= criticalPercent * 0.9) {
+            return HealthLevel.WARN
+        }
+        return HealthLevel.OK
+    }
+}
+
+data class PingProbeResult(
+    val lossPercent: Double? = null,
+    val avgMs: Double? = null,
+    val error: String? = null,
+)
+
+data class NetworkProbeData(
+    val dnsOk: Boolean,
+    val httpOk: Int,
+    val httpTotal: Int,
+    val httpFailures: List<String>,
+    val tcpOk: Boolean,
+    val ping: PingProbeResult,
+    val gateway: String?,
+    val defaultIface: String?,
+    val ifaceStats: Map<String, Long>?,
+)
+
+class NetworkHealthChecker(private val settings: Settings) {
+    fun check(): CheckResult {
+        val (probe, errors, warnings) = collectProbeData()
+        evaluateHttp(probe.httpOk, probe.httpFailures, errors, warnings)
+        evaluatePing(probe.ping, errors, warnings)
+        val level = resolveLevel(errors, warnings)
+        val summary = buildSummary(probe)
+        val details = buildDetails(probe, warnings, errors)
+        return CheckResult("Network", level, summary, details)
+    }
+
+    private fun collectProbeData(): Triple<NetworkProbeData, MutableList<String>, MutableList<String>> {
+        val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+
+        val dnsOk = checkDns(errors)
+        val (httpOk, httpTotal, httpFailures) = checkHttp()
+        val tcpOk = checkTcp(errors)
+        val ping = checkPing()
+        val (gateway, defaultIface) = defaultRoute()
+        val ifaceStats = if (defaultIface != null) readInterfaceStats(defaultIface) else null
+
+        val probe = NetworkProbeData(
+            dnsOk = dnsOk,
+            httpOk = httpOk,
+            httpTotal = httpTotal,
+            httpFailures = httpFailures,
+            tcpOk = tcpOk,
+            ping = ping,
+            gateway = gateway,
+            defaultIface = defaultIface,
+            ifaceStats = ifaceStats,
+        )
+
+        return Triple(probe, errors, warnings)
+    }
+
+    private fun evaluateHttp(
+        httpOk: Int,
+        httpFailures: List<String>,
+        errors: MutableList<String>,
+        warnings: MutableList<String>,
+    ) {
+        if (httpOk == 0) {
+            errors += httpFailures
+            return
+        }
+        warnings += httpFailures
+    }
+
+    private fun evaluatePing(
+        ping: PingProbeResult,
+        errors: MutableList<String>,
+        warnings: MutableList<String>,
+    ) {
+        if (ping.error != null) {
+            warnings += "ping($DEFAULT_NETWORK_PING_HOST): ${ping.error}"
+            return
+        }
+
+        ping.lossPercent?.let { loss ->
+            when {
+                loss >= DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT -> errors += "ping loss ${formatDouble(loss)}%"
+                loss >= DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT -> warnings += "ping loss ${formatDouble(loss)}%"
+            }
+        }
+
+        ping.avgMs?.let { avg ->
+            if (avg >= DEFAULT_NETWORK_PING_WARN_AVG_MS) {
+                warnings += "ping avg ${formatDouble(avg)}ms"
+            }
+        }
+    }
+
+    private fun resolveLevel(errors: List<String>, warnings: List<String>): HealthLevel {
+        if (errors.isNotEmpty()) {
+            return HealthLevel.CRIT
+        }
+        if (warnings.isNotEmpty()) {
+            return HealthLevel.WARN
+        }
+        return HealthLevel.OK
+    }
+
+    private fun buildSummary(probe: NetworkProbeData): String {
+        val summary = StringBuilder()
+        summary.append("dns=").append(if (probe.dnsOk) "ok" else "fail")
+        summary.append(", http=").append(probe.httpOk).append('/').append(probe.httpTotal)
+        summary.append(", tcp=").append(if (probe.tcpOk) "ok" else "fail")
+        probe.ping.lossPercent?.let { summary.append(", pingLoss=").append(formatDouble(it)).append('%') }
+        return summary.toString()
+    }
+
+    private fun buildDetails(
+        probe: NetworkProbeData,
+        warnings: List<String>,
+        errors: List<String>,
+    ): String {
+        val detailsParts = mutableListOf<String>()
+        detailsParts += "defaultIface=${probe.defaultIface ?: "unknown"}"
+        detailsParts += "defaultGw=${probe.gateway ?: "unknown"}"
+
+        probe.ping.avgMs?.let { detailsParts += "pingAvg=${formatDouble(it)}ms" }
+
+        probe.ifaceStats?.let { stats ->
+            detailsParts += "ifaceErrors=" +
+                "rx_err ${stats["rx_errors"]}, " +
+                "tx_err ${stats["tx_errors"]}, " +
+                "rx_drop ${stats["rx_dropped"]}, " +
+                "tx_drop ${stats["tx_dropped"]}"
+        }
+
+        if (warnings.isNotEmpty()) {
+            detailsParts += "warn=${warnings.joinToString(" | ")}"
+        }
+        if (errors.isNotEmpty()) {
+            detailsParts += "errors=${errors.joinToString(" | ")}"
+        }
+
+        return detailsParts.joinToString(", ")
+    }
+
+    private fun checkDns(errors: MutableList<String>): Boolean {
+        return try {
+            InetAddress.getAllByName(DEFAULT_NETWORK_DNS_HOST)
+            true
+        } catch (ex: Exception) {
+            errors += "dns($DEFAULT_NETWORK_DNS_HOST): ${ex.message ?: ex::class.simpleName}"
+            false
+        }
+    }
+
+    private fun checkHttp(): Triple<Int, Int, List<String>> {
+        val client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS.toLong()))
+            .build()
+
+        var ok = 0
+        val failures = mutableListOf<String>()
+
+        for (url in DEFAULT_NETWORK_URLS) {
+            try {
+                val request = HttpRequest.newBuilder(URI.create(url))
+                    .GET()
+                    .timeout(Duration.ofSeconds(DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS.toLong()))
+                    .build()
+
+                val response = client.send(request, HttpResponse.BodyHandlers.discarding())
+                val status = response.statusCode()
+                if (status in 200..399) {
+                    ok += 1
+                } else {
+                    failures += "http($url) status=$status"
+                }
+            } catch (ex: Exception) {
+                failures += "http($url): ${ex.message ?: ex::class.simpleName}"
+            }
+        }
+
+        return Triple(ok, DEFAULT_NETWORK_URLS.size, failures)
+    }
+
+    private fun checkTcp(errors: MutableList<String>): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(
+                    InetSocketAddress(DEFAULT_NETWORK_TCP_HOST, DEFAULT_NETWORK_TCP_PORT),
+                    DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS * 1000,
+                )
+            }
+            true
+        } catch (ex: Exception) {
+            errors += "tcp($DEFAULT_NETWORK_TCP_HOST:$DEFAULT_NETWORK_TCP_PORT): ${ex.message ?: ex::class.simpleName}"
+            false
+        }
+    }
+
+    private fun checkPing(): PingProbeResult {
+        val pingPath = resolveCommand("ping") ?: return PingProbeResult(error = "ping not installed")
+        val command = listOf(
+            pingPath,
+            "-c",
+            DEFAULT_NETWORK_PING_COUNT.toString(),
+            "-W",
+            DEFAULT_NETWORK_PING_TIMEOUT_SECONDS.toString(),
+            DEFAULT_NETWORK_PING_HOST,
+        )
+
+        val timeout = maxOf(3, DEFAULT_NETWORK_PING_COUNT * DEFAULT_NETWORK_PING_TIMEOUT_SECONDS + 2)
+        val result = runCommand(command, timeout)
+        if (result.timedOut) {
+            return PingProbeResult(error = "ping timeout")
+        }
+
+        val (loss, avg) = parsePingOutput(result.output)
+        if (result.code != 0 && loss == null) {
+            return PingProbeResult(error = "ping command failed")
+        }
+
+        return PingProbeResult(lossPercent = loss, avgMs = avg)
+    }
+
+    private fun parsePingOutput(output: String): Pair<Double?, Double?> {
+        val loss = Regex("""([\\d.]+)%\\s+packet loss""")
+            .find(output)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toDoubleOrNull()
+
+        val avg = Regex("""=\\s*[\\d.]+/([\\d.]+)/[\\d.]+/[\\d.]+""")
+            .find(output)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toDoubleOrNull()
+            ?: Regex("""=\\s*[\\d.]+/([\\d.]+)/[\\d.]+""")
+                .find(output)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toDoubleOrNull()
+
+        return loss to avg
+    }
+
+    private fun defaultRoute(): Pair<String?, String?> {
+        val result = runCommand(listOf("ip", "route", "show", "default"), 2)
+        if (result.code != 0 || result.output.isBlank()) {
+            return null to null
+        }
+
+        val line = result.output.lineSequence().firstOrNull()?.trim().orEmpty()
+        val match = Regex("""default via (\\S+) dev (\\S+)""").find(line) ?: return null to null
+        return match.groupValues[1] to match.groupValues[2]
+    }
+
+    private fun readInterfaceStats(iface: String): Map<String, Long>? {
+        val statsPath = Paths.get("/sys/class/net/$iface/statistics")
+        if (!Files.isDirectory(statsPath)) {
+            return null
+        }
+
+        val fields = listOf("rx_errors", "tx_errors", "rx_dropped", "tx_dropped")
+        val result = mutableMapOf<String, Long>()
+
+        for (field in fields) {
+            val value = try {
+                Files.readString(statsPath.resolve(field)).trim().toLongOrNull()
+            } catch (_: Exception) {
+                null
+            }
+            if (value == null) {
+                return null
+            }
+            result[field] = value
+        }
+
+        return result
+    }
+}
+
+class XrayHealthChecker(private val settings: Settings) {
+    fun check(): CheckResult {
+        val timeout = settings.xrayCommandTimeoutSeconds
+        val serviceName = settings.xrayServiceName
+
+        val status = runCommand(listOf("systemctl", "is-active", serviceName), timeout)
+        if (status.timedOut) {
+            return CheckResult(
+                component = "Xray",
+                level = HealthLevel.CRIT,
+                summary = "status timeout",
+                details = "systemctl is-active timed out",
+            )
+        }
+
+        val output = status.output.trim()
+        val active = status.code == 0 && output == "active"
+        if (!active) {
+            val details = output.ifBlank { "inactive" }
+            return CheckResult("Xray", HealthLevel.CRIT, "inactive", details)
+        }
+
+        val meta = runCommand(
+            listOf(
+                "systemctl",
+                "show",
+                serviceName,
+                "--property",
+                "SubState,ActiveEnterTimestamp,NRestarts",
+                "--value",
+            ),
+            timeout,
+        )
+
+        if (meta.code != 0) {
+            return CheckResult("Xray", HealthLevel.OK, "active", "active")
+        }
+
+        val lines = meta.output.lines().map { it.trim() }
+        val subState = lines.getOrNull(0).orEmpty().ifBlank { "active" }
+        val activeSince = lines.getOrNull(1).orEmpty().ifBlank { "unknown" }
+        val restartCount = lines.getOrNull(2)?.toIntOrNull() ?: 0
+
+        if (restartCount >= DEFAULT_XRAY_RESTART_WARN_COUNT && DEFAULT_XRAY_RESTART_WARN_COUNT > 0) {
+            return CheckResult(
+                component = "Xray",
+                level = HealthLevel.WARN,
+                summary = "active, restarts=$restartCount",
+                details = "subState=$subState; since=$activeSince",
+            )
+        }
+
+        return CheckResult(
+            component = "Xray",
+            level = HealthLevel.OK,
+            summary = "active",
+            details = "subState=$subState; since=$activeSince; restarts=$restartCount",
+        )
+    }
+}
+
+class SystemHealthChecker(private val settings: Settings) {
+    fun check(): List<CheckResult> {
+        val cpu = cpuPercent()
+        val ram = ramPercent()
+        val disk = diskPercent("/")
+
+        val cpuLevel = ThresholdEvaluator.classify(cpu, settings.thresholdCpuPercent)
+        val ramLevel = ThresholdEvaluator.classify(ram, settings.thresholdRamPercent)
+        val diskLevel = ThresholdEvaluator.classify(disk, settings.thresholdDiskPercent)
+
+        return listOf(
+            CheckResult(
+                component = "CPU",
+                level = cpuLevel,
+                summary = fmtPercent(cpu),
+                details = "cpuLoad=${fmtPercent(cpu)}",
+            ),
+            CheckResult(
+                component = "RAM",
+                level = ramLevel,
+                summary = fmtPercent(ram),
+                details = "used=${fmtPercent(ram)}",
+            ),
+            CheckResult(
+                component = "Disk",
+                level = diskLevel,
+                summary = fmtPercent(disk),
+                details = "rootUsed=${fmtPercent(disk)}",
+            ),
+        )
+    }
+
+    private fun cpuPercent(): Double {
+        return try {
+            val (idle1, total1) = readProcStat()
+            Thread.sleep(200)
+            val (idle2, total2) = readProcStat()
+
+            val totalDelta = total2 - total1
+            val idleDelta = idle2 - idle1
+            if (totalDelta <= 0) {
+                -1.0
+            } else {
+                ((1.0 - (idleDelta / totalDelta)) * 100.0).coerceIn(0.0, 100.0)
+            }
+        } catch (_: Exception) {
+            -1.0
+        }
+    }
+
+    private fun readProcStat(): Pair<Double, Double> {
+        val line = Files.newBufferedReader(Paths.get("/proc/stat")).use { it.readLine() ?: "" }.trim()
+        val parts = line.split(Regex("\\s+"))
+        val values = parts.drop(1).map { it.toDouble() }
+        val idle = values.getOrElse(3) { 0.0 } + values.getOrElse(4) { 0.0 }
+        val total = values.sum()
+        return idle to total
+    }
+
+    private fun ramPercent(): Double {
+        return try {
+            var totalKb = 0.0
+            var availableKb = 0.0
+
+            Files.newBufferedReader(Paths.get("/proc/meminfo")).useLines { lines ->
+                lines.forEach { line ->
+                    when {
+                        line.startsWith("MemTotal:") -> {
+                            totalKb = line.split(Regex("\\s+")).getOrNull(1)?.toDoubleOrNull() ?: 0.0
+                        }
+
+                        line.startsWith("MemAvailable:") -> {
+                            availableKb = line.split(Regex("\\s+")).getOrNull(1)?.toDoubleOrNull() ?: 0.0
+                        }
+                    }
+                }
+            }
+
+            if (totalKb <= 0) {
+                -1.0
+            } else {
+                ((totalKb - availableKb) / totalKb * 100.0).coerceIn(0.0, 100.0)
+            }
+        } catch (_: Exception) {
+            -1.0
+        }
+    }
+
+    private fun diskPercent(path: String): Double {
+        return try {
+            val file = File(path)
+            val total = file.totalSpace
+            if (total <= 0) {
+                -1.0
+            } else {
+                val used = total - file.freeSpace
+                (used.toDouble() / total.toDouble() * 100.0).coerceIn(0.0, 100.0)
+            }
+        } catch (_: Exception) {
+            -1.0
+        }
+    }
+
+    private fun fmtPercent(value: Double): String {
+        if (value < 0) {
+            return "unknown"
+        }
+        return String.format(Locale.US, "%.1f%%", value)
+    }
+}
+
+private data class CommandResult(
+    val code: Int,
+    val output: String,
+    val timedOut: Boolean,
+)
+
+private fun runCommand(command: List<String>, timeoutSeconds: Int): CommandResult {
+    return try {
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .start()
+
+        val completed = process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        if (!completed) {
+            process.destroyForcibly()
+            process.waitFor(1, TimeUnit.SECONDS)
+            return CommandResult(-1, "timeout", true)
+        }
+
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        CommandResult(process.exitValue(), output, false)
+    } catch (ex: Exception) {
+        CommandResult(-1, ex.message ?: ex::class.simpleName.orEmpty(), false)
+    }
+}
+
+private fun resolveCommand(name: String): String? {
+    val result = runCommand(listOf("sh", "-c", "command -v $name"), 2)
+    if (result.code != 0 || result.output.isBlank()) {
+        return null
+    }
+    return result.output.lineSequence().firstOrNull()?.trim().takeUnless { it.isNullOrBlank() }
+}
+
+private fun formatDouble(value: Double): String {
+    return String.format(Locale.US, "%.1f", value)
+}

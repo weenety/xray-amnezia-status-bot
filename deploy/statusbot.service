@@ -1,5 +1,5 @@
 [Unit]
-Description=StatusBot (Python)
+Description=StatusBot (Kotlin)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,7 @@ User=statusbot
 Group=statusbot
 WorkingDirectory=/opt/statusbot
 EnvironmentFile=/etc/statusbot/statusbot.env
-ExecStart=/opt/statusbot/.venv/bin/statusbot
+ExecStart=/usr/bin/java -jar /opt/statusbot/statusbot.jar
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
