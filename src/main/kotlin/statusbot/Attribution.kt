@@ -1,5 +1,7 @@
 package statusbot
 
+private val HTTP_RATIO_REGEX = Regex("""http=(\d+)/(\d+)""")
+
 object IncidentAttributionEvaluator {
     fun evaluate(checks: List<CheckResult>): IncidentAttribution {
         if (checks.isEmpty()) {
@@ -76,11 +78,7 @@ object IncidentAttributionEvaluator {
         }
 
         if (network?.level == HealthLevel.WARN) {
-            return IncidentAttribution(
-                kind = AttributionKind.USER_SIDE_OR_ROUTE,
-                confidence = ConfidenceLevel.MEDIUM,
-                reason = "vpn and host are up, but network quality is degraded (${network.summary})",
-            )
+            return classifyNetworkWarn(network)
         }
 
         val affected = degraded.joinToString(", ") { "${it.component}=${it.level.name}" }
@@ -88,6 +86,54 @@ object IncidentAttributionEvaluator {
             kind = AttributionKind.MIXED,
             confidence = ConfidenceLevel.LOW,
             reason = "degraded checks: $affected",
+        )
+    }
+
+    private fun classifyNetworkWarn(network: CheckResult): IncidentAttribution {
+        val summaryLower = network.summary.lowercase()
+        val detailsLower = network.details.lowercase()
+
+        val probeSignals = listOf("ping not installed", "ping command failed", "ping timeout")
+        if (probeSignals.any(detailsLower::contains)) {
+            return IncidentAttribution(
+                kind = AttributionKind.INCONCLUSIVE,
+                confidence = ConfidenceLevel.LOW,
+                reason = "network warning is caused by probe/tooling limits (${network.summary})",
+            )
+        }
+
+        val httpRatio = HTTP_RATIO_REGEX.find(summaryLower)?.groupValues
+        val httpDegraded = if (httpRatio != null && httpRatio.size >= 3) {
+            val ok = httpRatio[1].toIntOrNull() ?: 0
+            val total = httpRatio[2].toIntOrNull() ?: 0
+            total > 0 && ok < total
+        } else {
+            detailsLower.contains("http(")
+        }
+        if (httpDegraded) {
+            return IncidentAttribution(
+                kind = AttributionKind.INCONCLUSIVE,
+                confidence = ConfidenceLevel.MEDIUM,
+                reason = "network warning is related to server egress checks (${network.summary})",
+            )
+        }
+
+        val qualitySignalsPresent = detailsLower.contains("ping loss") ||
+            detailsLower.contains("ping avg") ||
+            summaryLower.contains("pingloss=")
+
+        if (qualitySignalsPresent) {
+            return IncidentAttribution(
+                kind = AttributionKind.USER_SIDE_OR_ROUTE,
+                confidence = ConfidenceLevel.MEDIUM,
+                reason = "vpn and host are up, but network quality is degraded (${network.summary})",
+            )
+        }
+
+        return IncidentAttribution(
+            kind = AttributionKind.INCONCLUSIVE,
+            confidence = ConfidenceLevel.LOW,
+            reason = "network warning source is ambiguous (${network.summary})",
         )
     }
 }

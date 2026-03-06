@@ -66,4 +66,23 @@ class IncidentAttributionEvaluatorTest {
         assertEquals(ConfidenceLevel.HIGH, attribution.confidence)
         assertTrue(attribution.reason.contains("resource pressure"))
     }
+
+    @Test
+    fun `does not classify probe limitation warning as user side`() {
+        val checks = listOf(
+            CheckResult(
+                "Network",
+                HealthLevel.WARN,
+                "dns=ok, http=2/2, tcp=ok",
+                "defaultIface=eth0, defaultGw=1.1.1.1, warn=ping(1.1.1.1): ping not installed",
+            ),
+            CheckResult("Xray", HealthLevel.OK, "active", "details"),
+            CheckResult("AmneziaWG", HealthLevel.OK, "running", "details"),
+        )
+
+        val attribution = IncidentAttributionEvaluator.evaluate(checks)
+
+        assertEquals(AttributionKind.INCONCLUSIVE, attribution.kind)
+        assertEquals(ConfidenceLevel.LOW, attribution.confidence)
+    }
 }
