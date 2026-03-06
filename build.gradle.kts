@@ -3,7 +3,7 @@ import org.gradle.jvm.tasks.Jar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.1.10"
+    kotlin("jvm") version "2.3.10"
     application
 }
 
@@ -20,18 +20,18 @@ dependencies {
         // Long polling bot does not require Grizzly webhook server bits.
         exclude(group = "org.glassfish.grizzly")
     }
-    implementation("org.slf4j:slf4j-api:2.0.16")
-    runtimeOnly("ch.qos.logback:logback-classic:1.5.16")
+    implementation("org.slf4j:slf4j-api:2.0.17")
+    runtimeOnly("ch.qos.logback:logback-classic:1.5.32")
 
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testImplementation("io.mockk:mockk:1.13.14")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.0.2")
+    testImplementation("io.mockk:mockk-jvm:1.14.9")
 
     constraints {
         // Harden transitive dependencies reported by Mend.
-        implementation("com.fasterxml.jackson.core:jackson-core:2.17.2")
-        implementation("commons-codec:commons-codec:1.17.1")
-        implementation("org.apache.commons:commons-lang3:3.18.0")
+        implementation("com.fasterxml.jackson.core:jackson-core:2.21.1")
+        implementation("commons-codec:commons-codec:1.21.0")
+        implementation("org.apache.commons:commons-lang3:3.20.0")
     }
 }
 
