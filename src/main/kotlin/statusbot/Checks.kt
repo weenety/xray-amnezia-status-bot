@@ -266,18 +266,18 @@ class NetworkHealthChecker(private val settings: Settings) {
     }
 
     private fun parsePingOutput(output: String): Pair<Double?, Double?> {
-        val loss = Regex("""([\\d.]+)%\\s+packet loss""")
+        val loss = Regex("""([\d.]+)%\s+packet loss""")
             .find(output)
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
 
-        val avg = Regex("""=\\s*[\\d.]+/([\\d.]+)/[\\d.]+/[\\d.]+""")
+        val avg = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+""")
             .find(output)
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
-            ?: Regex("""=\\s*[\\d.]+/([\\d.]+)/[\\d.]+""")
+            ?: Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+""")
                 .find(output)
                 ?.groupValues
                 ?.getOrNull(1)
@@ -293,7 +293,7 @@ class NetworkHealthChecker(private val settings: Settings) {
         }
 
         val line = result.output.lineSequence().firstOrNull()?.trim().orEmpty()
-        val match = Regex("""default via (\\S+) dev (\\S+)""").find(line) ?: return null to null
+        val match = Regex("""default via (\S+) dev (\S+)""").find(line) ?: return null to null
         return match.groupValues[1] to match.groupValues[2]
     }
 
