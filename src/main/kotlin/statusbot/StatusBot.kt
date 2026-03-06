@@ -1,18 +1,18 @@
 package statusbot
 
 import org.slf4j.LoggerFactory
-import org.telegram.telegrambots.bots.TelegramLongPollingBot
-import org.telegram.telegrambots.meta.TelegramBotsApi
+import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient
+import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication
+import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException
-import org.telegram.telegrambots.meta.generics.BotSession
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession
+import org.telegram.telegrambots.meta.generics.TelegramClient
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-class StatusBotApp(settings: Settings) {
+class StatusBotApp(private val settings: Settings) {
     private val log = LoggerFactory.getLogger(StatusBotApp::class.java)
 
     private val monitoring = MonitoringService(settings)
@@ -23,22 +23,24 @@ class StatusBotApp(settings: Settings) {
     private val bot = StatusBot(settings, monitoring, alerting)
 
     fun run() {
-        val botsApi = TelegramBotsApi(DefaultBotSession::class.java)
-        val botSession: BotSession = botsApi.registerBot(bot)
+        val botsApplication = TelegramBotsLongPollingApplication()
+        val shutdownHook = Thread {
+            bot.shutdown()
+            botsApplication.close()
+        }
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
 
-        bot.startMonitoring()
-        Runtime.getRuntime().addShutdownHook(
-            Thread {
-                bot.shutdown()
-                botSession.stop()
-            },
-        )
-
-        log.info("StatusBot started")
         try {
+            botsApplication.registerBot(settings.telegramBotToken, bot)
+            bot.startMonitoring()
+            log.info("StatusBot started")
             CountDownLatch(1).await()
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
+        } finally {
+            bot.shutdown()
+            botsApplication.close()
+            runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
         }
     }
 }
@@ -47,15 +49,12 @@ private class StatusBot(
     private val settings: Settings,
     private val monitoring: MonitoringService,
     private val alerting: AlertingService,
-) : TelegramLongPollingBot() {
+) : LongPollingSingleThreadUpdateConsumer {
     private val log = LoggerFactory.getLogger(StatusBot::class.java)
+    private val telegramClient: TelegramClient = OkHttpTelegramClient(settings.telegramBotToken)
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
 
-    override fun getBotToken(): String = settings.telegramBotToken
-
-    override fun getBotUsername(): String = "statusbot"
-
-    override fun onUpdateReceived(update: Update) {
+    override fun consume(update: Update) {
         val message = update.message ?: return
         val text = message.text?.trim().orEmpty()
         if (text.isBlank()) {
@@ -110,13 +109,16 @@ private class StatusBot(
     }
 
     private fun safeSend(chatId: Long, text: String, parseMode: String?) {
-        val request = SendMessage(chatId.toString(), text)
+        val requestBuilder = SendMessage.builder()
+            .chatId(chatId.toString())
+            .text(text)
         if (parseMode != null) {
-            request.parseMode = parseMode
+            requestBuilder.parseMode(parseMode)
         }
+        val request = requestBuilder.build()
 
         try {
-            execute(request)
+            telegramClient.execute(request)
         } catch (ex: TelegramApiException) {
             log.error("Telegram send failed", ex)
         }

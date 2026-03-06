@@ -16,10 +16,9 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
-    implementation("org.telegram:telegrambots:6.9.7.1") {
-        // Long polling bot does not require Grizzly webhook server bits.
-        exclude(group = "org.glassfish.grizzly")
-    }
+    implementation("org.telegram:telegrambots-longpolling:9.4.0")
+    implementation("org.telegram:telegrambots-client:9.4.0")
+    implementation("org.telegram:telegrambots-meta:9.4.0")
     implementation("org.slf4j:slf4j-api:2.0.17")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
 
