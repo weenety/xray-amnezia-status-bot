@@ -16,15 +16,35 @@ fun formatStatus(snapshot: StatusSnapshot): String {
     val okCount = snapshot.checks.count { it.level == HealthLevel.OK }
     val warnCount = snapshot.checks.count { it.level == HealthLevel.WARN }
     val critCount = snapshot.checks.count { it.level == HealthLevel.CRIT }
+    val degraded = snapshot.overall != HealthLevel.OK || warnCount > 0 || critCount > 0
+    val byComponent = snapshot.checks.associateBy { it.component }
 
     val lines = mutableListOf<String>()
     lines += "Overall: ${snapshot.overall.name}"
     lines += "Checks: OK $okCount | WARN $warnCount | CRIT $critCount"
-    lines += "Attribution: ${snapshot.attribution.kind.name} (${snapshot.attribution.confidence.name}) - ${snapshot.attribution.reason}"
-    snapshot.checks.forEach { check ->
-        lines += "${check.component}: ${check.level.name} - ${check.summary}"
+    if (degraded) {
+        lines += "Attribution: ${snapshot.attribution.kind.name} (${snapshot.attribution.confidence.name}) - ${snapshot.attribution.reason}"
+        snapshot.checks.forEach { check ->
+            lines += "${check.component}: ${check.level.name} - ${check.summary}"
+        }
+    } else {
+        val serviceParts = listOf("Xray", "AmneziaWG", "Network")
+            .mapNotNull { component ->
+                byComponent[component]?.let { "$component=${it.level.name}" }
+            }
+        if (serviceParts.isNotEmpty()) {
+            lines += "Services: ${serviceParts.joinToString(" | ")}"
+        }
+
+        val systemParts = listOf("CPU", "RAM", "Disk")
+            .mapNotNull { component ->
+                byComponent[component]?.let { "${it.component} ${it.summary}" }
+            }
+        if (systemParts.isNotEmpty()) {
+            lines += "System: ${systemParts.joinToString(" | ")}"
+        }
     }
-    if (snapshot.timingsMs.isNotEmpty()) {
+    if (degraded && snapshot.timingsMs.isNotEmpty()) {
         val timingLevels = snapshot.timingsMs.entries
             .sortedBy { it.key }
             .map { (name, ms) -> name to classifyTimingLevel(name, ms) }

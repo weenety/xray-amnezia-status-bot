@@ -24,12 +24,12 @@ class StatusFormatterTest {
     }
 
     @Test
-    fun `includes timing diagnostics when provided`() {
+    fun `includes timing diagnostics when degraded`() {
         val snapshot = StatusSnapshot(
             timestamp = ZonedDateTime.now(),
-            overall = HealthLevel.OK,
+            overall = HealthLevel.WARN,
             checks = listOf(
-                CheckResult("Network", HealthLevel.OK, "ok", "details"),
+                CheckResult("Network", HealthLevel.WARN, "degraded", "details"),
             ),
             timingsMs = mapOf("Network" to 5100, "Xray" to 7, "System" to 600),
         )
@@ -41,5 +41,32 @@ class StatusFormatterTest {
         assertTrue(text.contains("Xray=OK"))
         assertTrue(text.contains("System=CRIT"))
         assertTrue(text.contains("Attribution:"))
+        assertTrue(text.contains("Network: WARN - degraded"))
+    }
+
+    @Test
+    fun `renders compact healthy output`() {
+        val snapshot = StatusSnapshot(
+            timestamp = ZonedDateTime.now(),
+            overall = HealthLevel.OK,
+            checks = listOf(
+                CheckResult("Network", HealthLevel.OK, "dns=ok, http=2/2, tcp=ok", "details"),
+                CheckResult("Xray", HealthLevel.OK, "active", "details"),
+                CheckResult("AmneziaWG", HealthLevel.OK, "running", "details"),
+                CheckResult("CPU", HealthLevel.OK, "5.0%", "details"),
+                CheckResult("RAM", HealthLevel.OK, "50.0%", "details"),
+                CheckResult("Disk", HealthLevel.OK, "10.0%", "details"),
+            ),
+            timingsMs = mapOf("Network" to 120, "Xray" to 40),
+        )
+
+        val text = formatStatus(snapshot)
+        assertTrue(!text.contains("Attribution:"))
+        assertTrue(!text.contains("TimingChecks:"))
+        assertTrue(!text.contains("Timings:"))
+        assertTrue(text.contains("Services: Xray=OK | AmneziaWG=OK | Network=OK"))
+        assertTrue(text.contains("System: CPU 5.0% | RAM 50.0% | Disk 10.0%"))
+        assertTrue(!text.contains("Network: OK -"))
+        assertTrue(!text.contains("CPU: OK -"))
     }
 }
