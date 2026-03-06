@@ -23,4 +23,4 @@ jobs:
           gradle-version: "9.0.0"
 
       - name: Build
-        run: ./gradlew clean build
+        run: gradle clean build
