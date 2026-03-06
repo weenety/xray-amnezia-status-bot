@@ -30,12 +30,14 @@ class StatusFormatterTest {
             checks = listOf(
                 CheckResult("Network", HealthLevel.OK, "ok", "details"),
             ),
-            timingsMs = mapOf("Network" to 42, "Xray" to 7),
+            timingsMs = mapOf("Network" to 5100, "Xray" to 7, "System" to 600),
         )
 
         val text = formatStatus(snapshot)
-        assertTrue(text.contains("Timings:"))
-        assertTrue(text.contains("Network 42ms"))
-        assertTrue(text.contains("Xray 7ms"))
+        assertTrue(text.contains("TimingChecks:"))
+        assertTrue(text.contains("OK 1 | WARN 1 | CRIT 1"))
+        assertTrue(text.contains("Network=WARN"))
+        assertTrue(text.contains("Xray=OK"))
+        assertTrue(text.contains("System=CRIT"))
     }
 }
