@@ -5,7 +5,9 @@ import java.time.ZonedDateTime
 class MonitoringService(settings: Settings) {
     private val network = NetworkHealthChecker()
     private val xray = XrayHealthChecker(settings)
+    private val amnezia = AmneziaDockerHealthChecker(settings)
     private val system = SystemHealthChecker(settings)
+    private val amneziaEnabled = settings.amneziaDockerEnabled
 
     @Volatile
     private var latestSnapshot: StatusSnapshot? = null
@@ -15,6 +17,9 @@ class MonitoringService(settings: Settings) {
         val checks = mutableListOf<CheckResult>()
         checks += network.check()
         checks += xray.check()
+        if (amneziaEnabled) {
+            checks += amnezia.check()
+        }
         checks += system.check()
 
         val overall = checks.maxByOrNull { it.level.severity }?.level ?: HealthLevel.WARN

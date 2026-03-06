@@ -382,6 +382,110 @@ class XrayHealthChecker(private val settings: Settings) {
     }
 }
 
+class AmneziaDockerHealthChecker(private val settings: Settings) {
+    fun check(): CheckResult {
+        val timeout = settings.amneziaDockerTimeoutSeconds
+        val containerName = settings.amneziaContainerName
+
+        val inspect = runCommand(
+            listOf(
+                "docker",
+                "inspect",
+                "--format",
+                "{{.State.Status}}|{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Name}}",
+                containerName,
+            ),
+            timeout,
+        )
+
+        if (inspect.timedOut) {
+            return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.CRIT,
+                summary = "inspect timeout",
+                details = "docker inspect timed out",
+            )
+        }
+
+        if (inspect.code != 0) {
+            val details = inspect.output.ifBlank { "container not found" }
+            return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.CRIT,
+                summary = "inspect failed",
+                details = details,
+            )
+        }
+
+        val parsed = parseInspectOutput(inspect.output, containerName)
+            ?: return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.WARN,
+                summary = "inspect parse failed",
+                details = inspect.output,
+            )
+
+        if (!parsed.running) {
+            return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.CRIT,
+                summary = "not running",
+                details = "name=${parsed.name}; status=${parsed.status}; health=${parsed.health}",
+            )
+        }
+
+        if (parsed.health == "unhealthy") {
+            return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.CRIT,
+                summary = "running, unhealthy",
+                details = "name=${parsed.name}; status=${parsed.status}; health=${parsed.health}",
+            )
+        }
+
+        if (parsed.health == "starting") {
+            return CheckResult(
+                component = "AmneziaWG",
+                level = HealthLevel.WARN,
+                summary = "running, health=starting",
+                details = "name=${parsed.name}; status=${parsed.status}; health=${parsed.health}",
+            )
+        }
+
+        return CheckResult(
+            component = "AmneziaWG",
+            level = HealthLevel.OK,
+            summary = "running",
+            details = "name=${parsed.name}; status=${parsed.status}; health=${parsed.health}",
+        )
+    }
+
+    private fun parseInspectOutput(output: String, fallbackName: String): DockerContainerState? {
+        val line = output.lineSequence().firstOrNull()?.trim().orEmpty()
+        if (line.isBlank()) {
+            return null
+        }
+
+        val parts = line.split("|")
+        if (parts.size < 4) {
+            return null
+        }
+
+        val status = parts[0].trim().ifBlank { "unknown" }
+        val running = parts[1].trim().equals("true", ignoreCase = true)
+        val health = parts[2].trim().ifBlank { "none" }
+        val name = parts[3].trim().removePrefix("/").ifBlank { fallbackName }
+        return DockerContainerState(name = name, status = status, running = running, health = health)
+    }
+}
+
+private data class DockerContainerState(
+    val name: String,
+    val status: String,
+    val running: Boolean,
+    val health: String,
+)
+
 class SystemHealthChecker(private val settings: Settings) {
     fun check(): List<CheckResult> {
         val cpu = cpuPercent()

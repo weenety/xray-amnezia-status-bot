@@ -9,6 +9,9 @@ data class Settings(
     val monitorRecoveryEnabled: Boolean,
     val xrayServiceName: String,
     val xrayCommandTimeoutSeconds: Int,
+    val amneziaDockerEnabled: Boolean,
+    val amneziaContainerName: String,
+    val amneziaDockerTimeoutSeconds: Int,
     val thresholdCpuPercent: Double,
     val thresholdRamPercent: Double,
     val thresholdDiskPercent: Double,
@@ -19,40 +22,38 @@ data class Settings(
     }
 
     companion object {
+        private const val DEFAULT_MONITOR_ENABLED = true
+        private const val DEFAULT_MONITOR_INTERVAL_SECONDS = 60
+        private const val DEFAULT_MONITOR_COOLDOWN_SECONDS = 300
+        private const val DEFAULT_MONITOR_RECOVERY_ENABLED = true
+        private const val DEFAULT_XRAY_SERVICE_NAME = "xray"
+        private const val DEFAULT_XRAY_COMMAND_TIMEOUT_SECONDS = 5
+        private const val DEFAULT_AMNEZIA_DOCKER_ENABLED = true
+        private const val DEFAULT_AMNEZIA_CONTAINER_NAME = "amnezia-awg"
+        private const val DEFAULT_AMNEZIA_DOCKER_TIMEOUT_SECONDS = 5
+        private const val DEFAULT_THRESHOLD_CPU_PERCENT = 85.0
+        private const val DEFAULT_THRESHOLD_RAM_PERCENT = 90.0
+        private const val DEFAULT_THRESHOLD_DISK_PERCENT = 90.0
+
         fun fromEnv(): Settings {
             val token = System.getenv("TELEGRAM_BOT_TOKEN")?.trim().orEmpty()
             val adminChatId = System.getenv("TELEGRAM_ADMIN_CHAT_ID")?.toLongOrNull() ?: 0L
             return Settings(
                 telegramBotToken = token,
                 telegramAdminChatId = adminChatId,
-                monitorEnabled = envBoolTrue("MONITOR_ENABLED"),
-                monitorIntervalSeconds = maxOf(5, envInt("MONITOR_INTERVAL_SECONDS", 60)),
-                monitorCooldownSeconds = maxOf(1, envInt("MONITOR_COOLDOWN_SECONDS", 300)),
-                monitorRecoveryEnabled = envBoolTrue("MONITOR_RECOVERY_ENABLED"),
-                xrayServiceName = System.getenv("XRAY_SERVICE_NAME")?.trim().orEmpty().ifBlank { "xray" },
-                xrayCommandTimeoutSeconds = maxOf(1, envInt("XRAY_COMMAND_TIMEOUT_SECONDS", 5)),
-                thresholdCpuPercent = envDouble("THRESHOLD_CPU_PERCENT", 85.0),
-                thresholdRamPercent = envDouble("THRESHOLD_RAM_PERCENT", 90.0),
-                thresholdDiskPercent = envDouble("THRESHOLD_DISK_PERCENT", 90.0),
+                monitorEnabled = DEFAULT_MONITOR_ENABLED,
+                monitorIntervalSeconds = DEFAULT_MONITOR_INTERVAL_SECONDS,
+                monitorCooldownSeconds = DEFAULT_MONITOR_COOLDOWN_SECONDS,
+                monitorRecoveryEnabled = DEFAULT_MONITOR_RECOVERY_ENABLED,
+                xrayServiceName = DEFAULT_XRAY_SERVICE_NAME,
+                xrayCommandTimeoutSeconds = DEFAULT_XRAY_COMMAND_TIMEOUT_SECONDS,
+                amneziaDockerEnabled = DEFAULT_AMNEZIA_DOCKER_ENABLED,
+                amneziaContainerName = DEFAULT_AMNEZIA_CONTAINER_NAME,
+                amneziaDockerTimeoutSeconds = DEFAULT_AMNEZIA_DOCKER_TIMEOUT_SECONDS,
+                thresholdCpuPercent = DEFAULT_THRESHOLD_CPU_PERCENT,
+                thresholdRamPercent = DEFAULT_THRESHOLD_RAM_PERCENT,
+                thresholdDiskPercent = DEFAULT_THRESHOLD_DISK_PERCENT,
             )
-        }
-
-        private fun envBoolTrue(name: String): Boolean {
-            val raw = System.getenv(name) ?: return true
-            return when (raw.trim().lowercase()) {
-                "1", "true", "yes", "on" -> true
-                else -> false
-            }
-        }
-
-        private fun envInt(name: String, default: Int): Int {
-            val raw = System.getenv(name) ?: return default
-            return raw.toIntOrNull() ?: default
-        }
-
-        private fun envDouble(name: String, default: Double): Double {
-            val raw = System.getenv(name) ?: return default
-            return raw.toDoubleOrNull() ?: default
         }
     }
 }
