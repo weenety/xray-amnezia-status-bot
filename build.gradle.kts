@@ -9,6 +9,7 @@ plugins {
 
 group = "statusbot"
 version = "0.1.0"
+val telegramBotsVersion = "9.4.0"
 
 repositories {
     mavenCentral()
@@ -16,9 +17,9 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
-    implementation("org.telegram:telegrambots-longpolling:9.4.0")
-    implementation("org.telegram:telegrambots-client:9.4.0")
-    implementation("org.telegram:telegrambots-meta:9.4.0")
+    implementation("org.telegram:telegrambots-longpolling:$telegramBotsVersion")
+    implementation("org.telegram:telegrambots-client:$telegramBotsVersion")
+    implementation("org.telegram:telegrambots-meta:$telegramBotsVersion")
     implementation("org.slf4j:slf4j-api:2.0.17")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
 

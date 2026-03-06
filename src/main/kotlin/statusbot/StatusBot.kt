@@ -1,13 +1,10 @@
 package statusbot
 
 import org.slf4j.LoggerFactory
-import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient
 import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage
+import org.telegram.telegrambots.meta.api.methods.ParseMode
 import org.telegram.telegrambots.meta.api.objects.Update
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException
-import org.telegram.telegrambots.meta.generics.TelegramClient
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -50,8 +47,12 @@ private class StatusBot(
     private val monitoring: MonitoringService,
     private val alerting: AlertingService,
 ) : LongPollingSingleThreadUpdateConsumer {
+    companion object {
+        private val HTML_PARSE_MODE: String = ParseMode.HTML
+    }
+
     private val log = LoggerFactory.getLogger(StatusBot::class.java)
-    private val telegramClient: TelegramClient = OkHttpTelegramClient(settings.telegramBotToken)
+    private val telegram: TelegramGateway = TelegramApiGateway(settings.telegramBotToken)
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
 
     override fun consume(update: Update) {
@@ -74,7 +75,7 @@ private class StatusBot(
 
         try {
             val snapshot = monitoring.collectStatus()
-            safeSend(chatId, formatStatus(snapshot), parseMode = "HTML")
+            safeSend(chatId, formatStatus(snapshot), parseMode = HTML_PARSE_MODE)
         } catch (ex: Exception) {
             log.error("Failed to collect status", ex)
             safeSend(chatId, "Failed to collect status", parseMode = null)
@@ -109,18 +110,6 @@ private class StatusBot(
     }
 
     private fun safeSend(chatId: Long, text: String, parseMode: String?) {
-        val requestBuilder = SendMessage.builder()
-            .chatId(chatId.toString())
-            .text(text)
-        if (parseMode != null) {
-            requestBuilder.parseMode(parseMode)
-        }
-        val request = requestBuilder.build()
-
-        try {
-            telegramClient.execute(request)
-        } catch (ex: TelegramApiException) {
-            log.error("Telegram send failed", ex)
-        }
+        telegram.send(chatId, text, parseMode)
     }
 }
