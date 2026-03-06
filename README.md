@@ -29,7 +29,7 @@ Everything else is fixed in code defaults:
 ## Build and Run
 
 ```bash
-gradle clean test fatJar
+gradle clean build
 java -jar build/libs/statusbot.jar
 ```
 
