@@ -16,13 +16,23 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
-    implementation("org.telegram:telegrambots:6.9.7.1")
+    implementation("org.telegram:telegrambots:6.9.7.1") {
+        // Long polling bot does not require Grizzly webhook server bits.
+        exclude(group = "org.glassfish.grizzly")
+    }
     implementation("org.slf4j:slf4j-api:2.0.16")
     runtimeOnly("ch.qos.logback:logback-classic:1.5.16")
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testImplementation("io.mockk:mockk:1.13.14")
+
+    constraints {
+        // Harden transitive dependencies reported by Mend.
+        implementation("com.fasterxml.jackson.core:jackson-core:2.17.2")
+        implementation("commons-codec:commons-codec:1.17.1")
+        implementation("org.apache.commons:commons-lang3:3.18.0")
+    }
 }
 
 kotlin {

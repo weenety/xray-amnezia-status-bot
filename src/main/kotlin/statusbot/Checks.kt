@@ -63,7 +63,7 @@ data class NetworkProbeData(
     val ifaceStats: Map<String, Long>?,
 )
 
-class NetworkHealthChecker(private val settings: Settings) {
+class NetworkHealthChecker {
     fun check(): CheckResult {
         val (probe, errors, warnings) = collectProbeData()
         evaluateHttp(probe.httpOk, probe.httpFailures, errors, warnings)
@@ -241,7 +241,7 @@ class NetworkHealthChecker(private val settings: Settings) {
     }
 
     private fun checkPing(): PingProbeResult {
-        val pingPath = resolveCommand("ping") ?: return PingProbeResult(error = "ping not installed")
+        val pingPath = resolvePingCommand() ?: return PingProbeResult(error = "ping not installed")
         val command = listOf(
             pingPath,
             "-c",
@@ -338,8 +338,7 @@ class XrayHealthChecker(private val settings: Settings) {
         }
 
         val output = status.output.trim()
-        val active = status.code == 0 && output == "active"
-        if (!active) {
+        if (status.code != 0 || output != "active") {
             val details = output.ifBlank { "inactive" }
             return CheckResult("Xray", HealthLevel.CRIT, "inactive", details)
         }
@@ -365,7 +364,7 @@ class XrayHealthChecker(private val settings: Settings) {
         val activeSince = lines.getOrNull(1).orEmpty().ifBlank { "unknown" }
         val restartCount = lines.getOrNull(2)?.toIntOrNull() ?: 0
 
-        if (restartCount >= DEFAULT_XRAY_RESTART_WARN_COUNT && DEFAULT_XRAY_RESTART_WARN_COUNT > 0) {
+        if (restartCount >= DEFAULT_XRAY_RESTART_WARN_COUNT) {
             return CheckResult(
                 component = "Xray",
                 level = HealthLevel.WARN,
@@ -387,7 +386,7 @@ class SystemHealthChecker(private val settings: Settings) {
     fun check(): List<CheckResult> {
         val cpu = cpuPercent()
         val ram = ramPercent()
-        val disk = diskPercent("/")
+        val disk = rootDiskPercent()
 
         val cpuLevel = ThresholdEvaluator.classify(cpu, settings.thresholdCpuPercent)
         val ramLevel = ThresholdEvaluator.classify(ram, settings.thresholdRamPercent)
@@ -471,9 +470,9 @@ class SystemHealthChecker(private val settings: Settings) {
         }
     }
 
-    private fun diskPercent(path: String): Double {
+    private fun rootDiskPercent(): Double {
         return try {
-            val file = File(path)
+            val file = File("/")
             val total = file.totalSpace
             if (total <= 0) {
                 -1.0
@@ -520,8 +519,8 @@ private fun runCommand(command: List<String>, timeoutSeconds: Int): CommandResul
     }
 }
 
-private fun resolveCommand(name: String): String? {
-    val result = runCommand(listOf("sh", "-c", "command -v $name"), 2)
+private fun resolvePingCommand(): String? {
+    val result = runCommand(listOf("sh", "-c", "command -v ping"), 2)
     if (result.code != 0 || result.output.isBlank()) {
         return null
     }

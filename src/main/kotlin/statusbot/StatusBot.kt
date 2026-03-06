@@ -11,7 +11,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-class StatusBotApp(private val settings: Settings) {
+class StatusBotApp(settings: Settings) {
     private val log = LoggerFactory.getLogger(StatusBotApp::class.java)
 
     private val monitoring = MonitoringService(settings)

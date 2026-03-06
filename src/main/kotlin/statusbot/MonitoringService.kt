@@ -2,8 +2,8 @@ package statusbot
 
 import java.time.ZonedDateTime
 
-class MonitoringService(private val settings: Settings) {
-    private val network = NetworkHealthChecker(settings)
+class MonitoringService(settings: Settings) {
+    private val network = NetworkHealthChecker()
     private val xray = XrayHealthChecker(settings)
     private val system = SystemHealthChecker(settings)
 
@@ -27,7 +27,4 @@ class MonitoringService(private val settings: Settings) {
         return snapshot
     }
 
-    fun getLatestOrCollect(): StatusSnapshot {
-        return latestSnapshot ?: collectStatus()
-    }
 }
