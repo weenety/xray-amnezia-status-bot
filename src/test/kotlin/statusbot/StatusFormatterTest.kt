@@ -20,6 +20,7 @@ class StatusFormatterTest {
         assertTrue(text.startsWith("<pre>"))
         assertTrue(text.endsWith("</pre>"))
         assertTrue(text.contains("&lt;"))
+        assertTrue(text.contains("Attribution:"))
     }
 
     @Test
@@ -39,5 +40,6 @@ class StatusFormatterTest {
         assertTrue(text.contains("Network=WARN"))
         assertTrue(text.contains("Xray=OK"))
         assertTrue(text.contains("System=CRIT"))
+        assertTrue(text.contains("Attribution:"))
     }
 }

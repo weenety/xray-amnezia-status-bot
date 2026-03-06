@@ -20,6 +20,7 @@ fun formatStatus(snapshot: StatusSnapshot): String {
     val lines = mutableListOf<String>()
     lines += "Overall: ${snapshot.overall.name}"
     lines += "Checks: OK $okCount | WARN $warnCount | CRIT $critCount"
+    lines += "Attribution: ${snapshot.attribution.kind.name} (${snapshot.attribution.confidence.name}) - ${snapshot.attribution.reason}"
     snapshot.checks.forEach { check ->
         lines += "${check.component}: ${check.level.name} - ${check.summary}"
     }

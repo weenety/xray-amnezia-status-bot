@@ -9,6 +9,7 @@ Lightweight Telegram bot for VPS health monitoring, implemented in Kotlin/JVM.
 - `xray` service checks via `systemctl` (+ restart count)
 - optional `amnezia-awg` Docker container check
 - CPU/RAM/Disk health checks
+- incident attribution (`VPS_SIDE` vs `USER_SIDE_OR_ROUTE` with confidence)
 - automatic alerts with cooldown
 - recovery notifications
 

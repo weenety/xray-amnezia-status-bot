@@ -29,20 +29,29 @@ class MonitoringService(settings: Settings) {
         }
 
         val overall = checks.maxByOrNull { it.level.severity }?.level ?: HealthLevel.WARN
+        val attribution = IncidentAttributionEvaluator.evaluate(checks)
         val snapshot = StatusSnapshot(
             timestamp = ZonedDateTime.now(),
             overall = overall,
             checks = checks,
             timingsMs = timings,
+            attribution = attribution,
         )
 
         if (overall != HealthLevel.OK) {
             val badChecks = checks
                 .filter { it.level != HealthLevel.OK }
                 .joinToString(" | ") { "${it.component}:${it.level.name} (${it.summary})" }
-            log.warn("Health degraded: overall={}, badChecks={}, timingsMs={}", overall.name, badChecks, timings)
+            log.warn(
+                "Health degraded: overall={}, badChecks={}, attribution={}({}), timingsMs={}",
+                overall.name,
+                badChecks,
+                attribution.kind.name,
+                attribution.confidence.name,
+                timings,
+            )
         } else {
-            log.debug("Health OK, timingsMs={}", timings)
+            log.debug("Health OK, attribution={}, timingsMs={}", attribution.kind.name, timings)
         }
 
         latestSnapshot = snapshot
