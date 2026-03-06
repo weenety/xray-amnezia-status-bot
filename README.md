@@ -36,3 +36,4 @@ java -jar build/libs/statusbot.jar
 
 - Environment template: `deploy/statusbot.env.example`
 - Systemd unit: `deploy/statusbot.service`
+- Unit is tuned for low-memory JVM profile (`-Xms16m -Xmx80m`, `SerialGC`).

@@ -29,6 +29,15 @@ private const val DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT = 5.0
 private const val DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT = 20.0
 private const val DEFAULT_NETWORK_PING_WARN_AVG_MS = 250.0
 private const val DEFAULT_XRAY_RESTART_WARN_COUNT = 3
+private val SPLIT_WHITESPACE_REGEX = Regex("\\s+")
+private val PING_LOSS_REGEX = Regex("""([\d.]+)%\s+packet loss""")
+private val PING_AVG_REGEX = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+""")
+private val PING_AVG_SHORT_REGEX = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+""")
+private val DEFAULT_ROUTE_REGEX = Regex("""default via (\S+) dev (\S+)""")
+private val SHARED_HTTP_CLIENT: HttpClient = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS.toLong()))
+    .build()
+private val RESOLVED_PING_PATH: String? by lazy { resolvePingBinary() }
 
 object ThresholdEvaluator {
     fun classify(valuePercent: Double, criticalPercent: Double): HealthLevel {
@@ -196,10 +205,6 @@ class NetworkHealthChecker {
     }
 
     private fun checkHttp(): Triple<Int, Int, List<String>> {
-        val client = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS.toLong()))
-            .build()
-
         var ok = 0
         val failures = mutableListOf<String>()
 
@@ -210,7 +215,7 @@ class NetworkHealthChecker {
                     .timeout(Duration.ofSeconds(DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS.toLong()))
                     .build()
 
-                val response = client.send(request, HttpResponse.BodyHandlers.discarding())
+                val response = SHARED_HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.discarding())
                 val status = response.statusCode()
                 if (status in 200..399) {
                     ok += 1
@@ -241,7 +246,7 @@ class NetworkHealthChecker {
     }
 
     private fun checkPing(): PingProbeResult {
-        val pingPath = resolvePingCommand() ?: return PingProbeResult(error = "ping not installed")
+        val pingPath = RESOLVED_PING_PATH ?: return PingProbeResult(error = "ping not installed")
         val command = listOf(
             pingPath,
             "-c",
@@ -266,18 +271,18 @@ class NetworkHealthChecker {
     }
 
     private fun parsePingOutput(output: String): Pair<Double?, Double?> {
-        val loss = Regex("""([\d.]+)%\s+packet loss""")
+        val loss = PING_LOSS_REGEX
             .find(output)
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
 
-        val avg = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+""")
+        val avg = PING_AVG_REGEX
             .find(output)
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
-            ?: Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+""")
+            ?: PING_AVG_SHORT_REGEX
                 .find(output)
                 ?.groupValues
                 ?.getOrNull(1)
@@ -293,7 +298,7 @@ class NetworkHealthChecker {
         }
 
         val line = result.output.lineSequence().firstOrNull()?.trim().orEmpty()
-        val match = Regex("""default via (\S+) dev (\S+)""").find(line) ?: return null to null
+        val match = DEFAULT_ROUTE_REGEX.find(line) ?: return null to null
         return match.groupValues[1] to match.groupValues[2]
     }
 
@@ -538,7 +543,7 @@ class SystemHealthChecker(private val settings: Settings) {
 
     private fun readProcStat(): Pair<Double, Double> {
         val line = Files.newBufferedReader(Paths.get("/proc/stat")).use { it.readLine() ?: "" }.trim()
-        val parts = line.split(Regex("\\s+"))
+        val parts = line.split(SPLIT_WHITESPACE_REGEX)
         val values = parts.drop(1).map { it.toDouble() }
         val idle = values.getOrElse(3) { 0.0 } + values.getOrElse(4) { 0.0 }
         val total = values.sum()
@@ -554,11 +559,11 @@ class SystemHealthChecker(private val settings: Settings) {
                 lines.forEach { line ->
                     when {
                         line.startsWith("MemTotal:") -> {
-                            totalKb = line.split(Regex("\\s+")).getOrNull(1)?.toDoubleOrNull() ?: 0.0
+                            totalKb = line.split(SPLIT_WHITESPACE_REGEX).getOrNull(1)?.toDoubleOrNull() ?: 0.0
                         }
 
                         line.startsWith("MemAvailable:") -> {
-                            availableKb = line.split(Regex("\\s+")).getOrNull(1)?.toDoubleOrNull() ?: 0.0
+                            availableKb = line.split(SPLIT_WHITESPACE_REGEX).getOrNull(1)?.toDoubleOrNull() ?: 0.0
                         }
                     }
                 }
@@ -623,7 +628,7 @@ private fun runCommand(command: List<String>, timeoutSeconds: Int): CommandResul
     }
 }
 
-private fun resolvePingCommand(): String? {
+private fun resolvePingBinary(): String? {
     val result = runCommand(listOf("sh", "-c", "command -v ping"), 2)
     if (result.code != 0 || result.output.isBlank()) {
         return null

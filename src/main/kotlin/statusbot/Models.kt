@@ -19,6 +19,7 @@ data class StatusSnapshot(
     val timestamp: ZonedDateTime,
     val overall: HealthLevel,
     val checks: List<CheckResult>,
+    val timingsMs: Map<String, Long> = emptyMap(),
 )
 
 data class AlertEvent(

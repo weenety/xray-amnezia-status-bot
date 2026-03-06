@@ -15,6 +15,12 @@ fun formatStatus(snapshot: StatusSnapshot): String {
     snapshot.checks.forEach { check ->
         lines += "${check.component}: ${check.level.name} - ${check.summary}"
     }
+    if (snapshot.timingsMs.isNotEmpty()) {
+        val timings = snapshot.timingsMs.entries
+            .sortedBy { it.key }
+            .joinToString(" | ") { "${it.key} ${it.value}ms" }
+        lines += "Timings: $timings"
+    }
     lines += "Updated: ${snapshot.timestamp.format(STATUS_TIME_FORMAT)}"
 
     return "<pre>${escapeHtml(lines.joinToString("\n"))}</pre>"

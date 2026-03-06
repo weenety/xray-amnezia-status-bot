@@ -9,7 +9,8 @@ User=statusbot
 Group=statusbot
 WorkingDirectory=/opt/statusbot
 EnvironmentFile=/etc/statusbot/statusbot.env
-ExecStart=/usr/bin/java -jar /opt/statusbot/statusbot.jar
+ExecStart=/usr/bin/java -Xms16m -Xmx80m -XX:+UseSerialGC -XX:MaxMetaspaceSize=64m -XX:ReservedCodeCacheSize=32m -XX:+ExitOnOutOfMemoryError -jar /opt/statusbot/statusbot.jar
+SuccessExitStatus=143
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

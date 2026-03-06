@@ -6,6 +6,7 @@ import org.telegram.telegrambots.meta.TelegramBotsApi
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException
+import org.telegram.telegrambots.meta.generics.BotSession
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -23,17 +24,22 @@ class StatusBotApp(settings: Settings) {
 
     fun run() {
         val botsApi = TelegramBotsApi(DefaultBotSession::class.java)
-        botsApi.registerBot(bot)
+        val botSession: BotSession = botsApi.registerBot(bot)
 
         bot.startMonitoring()
         Runtime.getRuntime().addShutdownHook(
             Thread {
                 bot.shutdown()
+                botSession.stop()
             },
         )
 
         log.info("StatusBot started")
-        CountDownLatch(1).await()
+        try {
+            CountDownLatch(1).await()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 }
 
