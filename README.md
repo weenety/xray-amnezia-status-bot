@@ -52,3 +52,6 @@ The unit is tuned for low memory (`-Xms16m -Xmx80m`, `SerialGC`).
 - monitor interval: `60s`
 - alert cooldown: `300s`
 - thresholds: CPU `85%`, RAM `90%`, Disk `90%`
+- CPU sample window: `1000ms`
+- alert confirmation: `2` consecutive degraded checks
+- CPU alert confirmation: `3` consecutive degraded checks

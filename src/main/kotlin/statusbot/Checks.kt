@@ -29,6 +29,7 @@ private const val DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT = 5.0
 private const val DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT = 20.0
 private const val DEFAULT_NETWORK_PING_WARN_AVG_MS = 250.0
 private const val DEFAULT_XRAY_RESTART_WARN_COUNT = 3
+private const val DEFAULT_CPU_SAMPLE_WINDOW_MILLIS = 1_000L
 private val SPLIT_WHITESPACE_REGEX = Regex("\\s+")
 private val PING_LOSS_REGEX = Regex("""([\d.]+)%\s+packet loss""")
 private val PING_AVG_REGEX = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+""")
@@ -526,7 +527,7 @@ class SystemHealthChecker(private val settings: Settings) {
     private fun cpuPercent(): Double {
         return try {
             val (idle1, total1) = readProcStat()
-            Thread.sleep(200)
+            Thread.sleep(DEFAULT_CPU_SAMPLE_WINDOW_MILLIS)
             val (idle2, total2) = readProcStat()
 
             val totalDelta = total2 - total1
