@@ -13,6 +13,10 @@ class StatusFormatterTest {
             checks = listOf(
                 CheckResult("Network", HealthLevel.WARN, "latency < 250ms", "details"),
             ),
+            traffic = TrafficSnapshot(
+                totals = TrafficTotals(iface = "eth0", rxBytes = 1024, txBytes = 2048),
+                rates = null,
+            ),
         )
 
         val text = formatStatus(snapshot)
@@ -31,6 +35,10 @@ class StatusFormatterTest {
             checks = listOf(
                 CheckResult("Network", HealthLevel.WARN, "degraded", "details"),
             ),
+            traffic = TrafficSnapshot(
+                totals = TrafficTotals(iface = "eth0", rxBytes = 2L * 1024 * 1024 * 1024, txBytes = 1024),
+                rates = TrafficRates(rxBytesPerSecond = 500_000.0, txBytesPerSecond = 125_000.0),
+            ),
             timingsMs = mapOf("Network" to 5100, "Xray" to 7, "System" to 600),
         )
 
@@ -42,6 +50,7 @@ class StatusFormatterTest {
         assertTrue(text.contains("System=CRIT"))
         assertTrue(text.contains("Attribution:"))
         assertTrue(text.contains("Network: WARN - degraded"))
+        assertTrue(text.contains("Traffic: eth0 | RX 2.0 GiB | TX 1.0 KiB | Now RX 4.0 Mbps | TX 1.0 Mbps"))
     }
 
     @Test
@@ -57,6 +66,10 @@ class StatusFormatterTest {
                 CheckResult("RAM", HealthLevel.OK, "50.0%", "details"),
                 CheckResult("Disk", HealthLevel.OK, "10.0%", "details"),
             ),
+            traffic = TrafficSnapshot(
+                totals = TrafficTotals(iface = "eth0", rxBytes = 512, txBytes = 256),
+                rates = null,
+            ),
             timingsMs = mapOf("Network" to 120, "Xray" to 40),
         )
 
@@ -66,6 +79,7 @@ class StatusFormatterTest {
         assertTrue(!text.contains("Timings:"))
         assertTrue(text.contains("Services: Xray=OK | AmneziaWG=OK | Network=OK"))
         assertTrue(text.contains("System: CPU 5.0% | RAM 50.0% | Disk 10.0%"))
+        assertTrue(text.contains("Traffic: eth0 | RX 512 B | TX 256 B | Now RX n/a | TX n/a"))
         assertTrue(!text.contains("Network: OK -"))
         assertTrue(!text.contains("CPU: OK -"))
     }

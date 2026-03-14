@@ -35,11 +35,28 @@ data class CheckResult(
     val details: String,
 )
 
+data class TrafficTotals(
+    val iface: String,
+    val rxBytes: Long,
+    val txBytes: Long,
+)
+
+data class TrafficRates(
+    val rxBytesPerSecond: Double,
+    val txBytesPerSecond: Double,
+)
+
+data class TrafficSnapshot(
+    val totals: TrafficTotals,
+    val rates: TrafficRates? = null,
+)
+
 data class StatusSnapshot(
     val timestamp: ZonedDateTime,
     val overall: HealthLevel,
     val checks: List<CheckResult>,
     val timingsMs: Map<String, Long> = emptyMap(),
+    val traffic: TrafficSnapshot? = null,
     val attribution: IncidentAttribution = IncidentAttribution(
         kind = AttributionKind.INCONCLUSIVE,
         confidence = ConfidenceLevel.LOW,

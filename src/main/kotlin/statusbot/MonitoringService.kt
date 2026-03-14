@@ -35,6 +35,7 @@ class MonitoringService(settings: Settings) {
             overall = overall,
             checks = checks,
             timingsMs = timings,
+            traffic = network.latestTrafficSnapshot(),
             attribution = attribution,
         )
 

@@ -1,6 +1,7 @@
 package statusbot
 
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private val STATUS_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z")
 private data class TimingThreshold(val warnMs: Long, val critMs: Long)
@@ -44,6 +45,9 @@ fun formatStatus(snapshot: StatusSnapshot): String {
             lines += "System: ${systemParts.joinToString(" | ")}"
         }
     }
+    snapshot.traffic?.let { traffic ->
+        lines += "Traffic: ${formatTraffic(traffic)}"
+    }
     if (degraded && snapshot.timingsMs.isNotEmpty()) {
         val timingLevels = snapshot.timingsMs.entries
             .sortedBy { it.key }
@@ -59,6 +63,25 @@ fun formatStatus(snapshot: StatusSnapshot): String {
     return "<pre>${escapeHtml(lines.joinToString("\n"))}</pre>"
 }
 
+private fun formatTraffic(traffic: TrafficSnapshot): String {
+    val totals = traffic.totals
+    val parts = mutableListOf<String>()
+    parts += totals.iface
+    parts += "RX ${formatBytes(totals.rxBytes)}"
+    parts += "TX ${formatBytes(totals.txBytes)}"
+
+    val rates = traffic.rates
+    if (rates != null) {
+        parts += "Now RX ${formatBitsPerSecond(rates.rxBytesPerSecond * 8.0)}"
+        parts += "TX ${formatBitsPerSecond(rates.txBytesPerSecond * 8.0)}"
+    } else {
+        parts += "Now RX n/a"
+        parts += "TX n/a"
+    }
+
+    return parts.joinToString(" | ")
+}
+
 private fun classifyTimingLevel(name: String, durationMs: Long): HealthLevel {
     val threshold = TIMING_THRESHOLDS[name] ?: DEFAULT_TIMING_THRESHOLD
     return when {
@@ -66,6 +89,32 @@ private fun classifyTimingLevel(name: String, durationMs: Long): HealthLevel {
         durationMs >= threshold.warnMs -> HealthLevel.WARN
         else -> HealthLevel.OK
     }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) {
+        return "$bytes B"
+    }
+
+    val units = listOf("KiB", "MiB", "GiB", "TiB")
+    var value = bytes.toDouble()
+    var unitIndex = -1
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex += 1
+    }
+    return String.format(Locale.US, "%.1f %s", value, units[unitIndex])
+}
+
+private fun formatBitsPerSecond(bitsPerSecond: Double): String {
+    val units = listOf("bps", "Kbps", "Mbps", "Gbps")
+    var value = bitsPerSecond
+    var unitIndex = 0
+    while (value >= 1000.0 && unitIndex < units.lastIndex) {
+        value /= 1000.0
+        unitIndex += 1
+    }
+    return String.format(Locale.US, "%.1f %s", value, units[unitIndex])
 }
 
 private fun escapeHtml(value: String): String {

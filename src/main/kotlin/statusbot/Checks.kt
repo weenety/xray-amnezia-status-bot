@@ -70,12 +70,34 @@ data class NetworkProbeData(
     val ping: PingProbeResult,
     val gateway: String?,
     val defaultIface: String?,
-    val ifaceStats: Map<String, Long>?,
+    val ifaceStats: InterfaceStats?,
+)
+
+data class InterfaceStats(
+    val rxErrors: Long,
+    val txErrors: Long,
+    val rxDropped: Long,
+    val txDropped: Long,
+    val rxBytes: Long,
+    val txBytes: Long,
+)
+
+private data class TrafficCounterSample(
+    val iface: String,
+    val rxBytes: Long,
+    val txBytes: Long,
+    val measuredAtNanos: Long,
 )
 
 class NetworkHealthChecker {
+    @Volatile
+    private var latestTraffic: TrafficSnapshot? = null
+    private var previousTrafficSample: TrafficCounterSample? = null
+
     fun check(): CheckResult {
         val (probe, errors, warnings) = collectProbeData()
+        latestTraffic = probe.defaultIface
+            ?.let { iface -> probe.ifaceStats?.let { stats -> toTrafficSnapshot(iface, stats) } }
         evaluateHttp(probe.httpOk, probe.httpFailures, errors, warnings)
         evaluatePing(probe.ping, errors, warnings)
         val level = resolveLevel(errors, warnings)
@@ -83,6 +105,8 @@ class NetworkHealthChecker {
         val details = buildDetails(probe, warnings, errors)
         return CheckResult("Network", level, summary, details)
     }
+
+    fun latestTrafficSnapshot(): TrafficSnapshot? = latestTraffic
 
     private fun collectProbeData(): Triple<NetworkProbeData, MutableList<String>, MutableList<String>> {
         val errors = mutableListOf<String>()
@@ -179,10 +203,10 @@ class NetworkHealthChecker {
 
         probe.ifaceStats?.let { stats ->
             detailsParts += "ifaceErrors=" +
-                "rx_err ${stats["rx_errors"]}, " +
-                "tx_err ${stats["tx_errors"]}, " +
-                "rx_drop ${stats["rx_dropped"]}, " +
-                "tx_drop ${stats["tx_dropped"]}"
+                "rx_err ${stats.rxErrors}, " +
+                "tx_err ${stats.txErrors}, " +
+                "rx_drop ${stats.rxDropped}, " +
+                "tx_drop ${stats.txDropped}"
         }
 
         if (warnings.isNotEmpty()) {
@@ -303,28 +327,64 @@ class NetworkHealthChecker {
         return match.groupValues[1] to match.groupValues[2]
     }
 
-    private fun readInterfaceStats(iface: String): Map<String, Long>? {
+    private fun readInterfaceStats(iface: String): InterfaceStats? {
         val statsPath = Paths.get("/sys/class/net/$iface/statistics")
         if (!Files.isDirectory(statsPath)) {
             return null
         }
 
-        val fields = listOf("rx_errors", "tx_errors", "rx_dropped", "tx_dropped")
-        val result = mutableMapOf<String, Long>()
-
-        for (field in fields) {
-            val value = try {
+        fun readStat(field: String): Long? {
+            return try {
                 Files.readString(statsPath.resolve(field)).trim().toLongOrNull()
             } catch (_: Exception) {
                 null
             }
-            if (value == null) {
-                return null
-            }
-            result[field] = value
         }
 
-        return result
+        return InterfaceStats(
+            rxErrors = readStat("rx_errors") ?: return null,
+            txErrors = readStat("tx_errors") ?: return null,
+            rxDropped = readStat("rx_dropped") ?: return null,
+            txDropped = readStat("tx_dropped") ?: return null,
+            rxBytes = readStat("rx_bytes") ?: return null,
+            txBytes = readStat("tx_bytes") ?: return null,
+        )
+    }
+
+    private fun toTrafficSnapshot(iface: String, stats: InterfaceStats): TrafficSnapshot {
+        val current = TrafficCounterSample(
+            iface = iface,
+            rxBytes = stats.rxBytes,
+            txBytes = stats.txBytes,
+            measuredAtNanos = System.nanoTime(),
+        )
+        val previous = previousTrafficSample
+        previousTrafficSample = current
+
+        val rates = if (previous != null && previous.iface == current.iface) {
+            val elapsedNanos = current.measuredAtNanos - previous.measuredAtNanos
+            val rxDelta = current.rxBytes - previous.rxBytes
+            val txDelta = current.txBytes - previous.txBytes
+            if (elapsedNanos > 0 && rxDelta >= 0 && txDelta >= 0) {
+                TrafficRates(
+                    rxBytesPerSecond = rxDelta * 1_000_000_000.0 / elapsedNanos.toDouble(),
+                    txBytesPerSecond = txDelta * 1_000_000_000.0 / elapsedNanos.toDouble(),
+                )
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+
+        return TrafficSnapshot(
+            totals = TrafficTotals(
+                iface = iface,
+                rxBytes = stats.rxBytes,
+                txBytes = stats.txBytes,
+            ),
+            rates = rates,
+        )
     }
 }
 
