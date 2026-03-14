@@ -33,7 +33,7 @@ class StatusOutputSmokeTest {
         assertTrue(text.contains("Overall: OK"))
         assertTrue(text.contains("Services: Xray=OK | AmneziaWG=OK | Network=OK"))
         assertTrue(text.contains("System: CPU 9.5% | RAM 54.8% | Disk 13.9%"))
-        assertTrue(text.contains("Traffic: eth0 | RX 13.0 GiB | TX 7.0 GiB | Now RX 1.0 Mbps | TX 2.0 Mbps"))
+        assertTrue(text.contains("Traffic: 20.0 GiB total | Now 3.0 Mbps"))
         assertTrue(!text.contains("Attribution:"))
         assertTrue(!text.contains("TimingChecks:"))
         assertTrue(!text.contains("Timings:"))
@@ -71,7 +71,7 @@ class StatusOutputSmokeTest {
         assertTrue(text.contains("Overall: WARN"))
         assertTrue(text.contains("Attribution: INCONCLUSIVE (LOW)"))
         assertTrue(text.contains("Network: WARN - dns=ok, http=2/2, tcp=ok"))
-        assertTrue(text.contains("Traffic: eth0 | RX 5.0 GiB | TX 3.0 GiB | Now RX n/a | TX n/a"))
+        assertTrue(text.contains("Traffic: 8.0 GiB total | Now n/a"))
         assertTrue(text.contains("TimingChecks:"))
         assertTrue(text.contains("Timings:"))
     }

@@ -66,17 +66,13 @@ fun formatStatus(snapshot: StatusSnapshot): String {
 private fun formatTraffic(traffic: TrafficSnapshot): String {
     val totals = traffic.totals
     val parts = mutableListOf<String>()
-    parts += totals.iface
-    parts += "RX ${formatBytes(totals.rxBytes)}"
-    parts += "TX ${formatBytes(totals.txBytes)}"
+    parts += "${formatBytes(totals.rxBytes + totals.txBytes)} total"
 
     val rates = traffic.rates
     if (rates != null) {
-        parts += "Now RX ${formatBitsPerSecond(rates.rxBytesPerSecond * 8.0)}"
-        parts += "TX ${formatBitsPerSecond(rates.txBytesPerSecond * 8.0)}"
+        parts += "Now ${formatBitsPerSecond((rates.rxBytesPerSecond + rates.txBytesPerSecond) * 8.0)}"
     } else {
-        parts += "Now RX n/a"
-        parts += "TX n/a"
+        parts += "Now n/a"
     }
 
     return parts.joinToString(" | ")

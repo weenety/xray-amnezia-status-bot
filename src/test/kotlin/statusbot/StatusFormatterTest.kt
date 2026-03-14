@@ -50,7 +50,7 @@ class StatusFormatterTest {
         assertTrue(text.contains("System=CRIT"))
         assertTrue(text.contains("Attribution:"))
         assertTrue(text.contains("Network: WARN - degraded"))
-        assertTrue(text.contains("Traffic: eth0 | RX 2.0 GiB | TX 1.0 KiB | Now RX 4.0 Mbps | TX 1.0 Mbps"))
+        assertTrue(text.contains("Traffic: 2.0 GiB total | Now 5.0 Mbps"))
     }
 
     @Test
@@ -79,7 +79,7 @@ class StatusFormatterTest {
         assertTrue(!text.contains("Timings:"))
         assertTrue(text.contains("Services: Xray=OK | AmneziaWG=OK | Network=OK"))
         assertTrue(text.contains("System: CPU 5.0% | RAM 50.0% | Disk 10.0%"))
-        assertTrue(text.contains("Traffic: eth0 | RX 512 B | TX 256 B | Now RX n/a | TX n/a"))
+        assertTrue(text.contains("Traffic: 768 B total | Now n/a"))
         assertTrue(!text.contains("Network: OK -"))
         assertTrue(!text.contains("CPU: OK -"))
     }
