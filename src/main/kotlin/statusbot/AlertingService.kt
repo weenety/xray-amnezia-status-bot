@@ -5,11 +5,14 @@ import java.time.ZonedDateTime
 
 private const val DEFAULT_ALERT_CONSECUTIVE_DEGRADED_CHECKS = 2
 private const val CPU_ALERT_CONSECUTIVE_DEGRADED_CHECKS = 3
+private const val NETWORK_WARN_ALERT_CONSECUTIVE_DEGRADED_CHECKS = 3
+private const val DEFAULT_RECOVERY_CONSECUTIVE_OK_CHECKS = 2
 private data class ComponentState(
     val lastObservedLevel: HealthLevel,
     val lastAlertAt: ZonedDateTime?,
     val alertedLevel: HealthLevel?,
     val consecutiveDegradedChecks: Int,
+    val consecutiveOkChecks: Int,
 )
 
 class AlertingService(cooldownSeconds: Int, private val recoveryEnabled: Boolean) {
@@ -39,24 +42,35 @@ class AlertingService(cooldownSeconds: Int, private val recoveryEnabled: Boolean
         now: ZonedDateTime,
     ): Pair<AlertEvent?, ComponentState> {
         if (check.level == HealthLevel.OK) {
-            if (previous?.alertedLevel != null && recoveryEnabled) {
-                val event = AlertEvent(
-                    component = check.component,
-                    level = check.level,
-                    message = "RECOVERY ${check.component} is OK. ${check.summary}",
-                )
+            val consecutiveOkChecks = if (previous?.lastObservedLevel == HealthLevel.OK) {
+                previous.consecutiveOkChecks + 1
+            } else {
+                1
+            }
+            if (previous?.alertedLevel != null && consecutiveOkChecks >= DEFAULT_RECOVERY_CONSECUTIVE_OK_CHECKS) {
+                val event = if (recoveryEnabled) {
+                    AlertEvent(
+                        component = check.component,
+                        level = check.level,
+                        message = "RECOVERY ${check.component} is OK. ${check.summary}",
+                    )
+                } else {
+                    null
+                }
                 return event to ComponentState(
                     lastObservedLevel = HealthLevel.OK,
                     lastAlertAt = previous.lastAlertAt,
                     alertedLevel = null,
                     consecutiveDegradedChecks = 0,
+                    consecutiveOkChecks = 0,
                 )
             }
             return null to ComponentState(
                 lastObservedLevel = HealthLevel.OK,
                 lastAlertAt = previous?.lastAlertAt,
-                alertedLevel = null,
+                alertedLevel = previous?.alertedLevel,
                 consecutiveDegradedChecks = 0,
+                consecutiveOkChecks = if (previous?.alertedLevel != null) consecutiveOkChecks else 0,
             )
         }
 
@@ -65,10 +79,13 @@ class AlertingService(cooldownSeconds: Int, private val recoveryEnabled: Boolean
         } else {
             previous.consecutiveDegradedChecks + 1
         }
-        val requiredChecks = if (check.component == "CPU") {
-            CPU_ALERT_CONSECUTIVE_DEGRADED_CHECKS
-        } else {
-            DEFAULT_ALERT_CONSECUTIVE_DEGRADED_CHECKS
+        val requiredChecks = when {
+            check.component == "CPU" -> CPU_ALERT_CONSECUTIVE_DEGRADED_CHECKS
+            check.component == "Network" && check.level == HealthLevel.WARN -> {
+                NETWORK_WARN_ALERT_CONSECUTIVE_DEGRADED_CHECKS
+            }
+
+            else -> DEFAULT_ALERT_CONSECUTIVE_DEGRADED_CHECKS
         }
         var shouldSend = previous?.alertedLevel == null && consecutiveDegradedChecks >= requiredChecks
         if (!shouldSend && previous?.alertedLevel != null && previous.alertedLevel != check.level) {
@@ -89,6 +106,7 @@ class AlertingService(cooldownSeconds: Int, private val recoveryEnabled: Boolean
                 lastAlertAt = now,
                 alertedLevel = check.level,
                 consecutiveDegradedChecks = consecutiveDegradedChecks,
+                consecutiveOkChecks = 0,
             )
         }
 
@@ -97,6 +115,7 @@ class AlertingService(cooldownSeconds: Int, private val recoveryEnabled: Boolean
             lastAlertAt = previous?.lastAlertAt,
             alertedLevel = previous?.alertedLevel,
             consecutiveDegradedChecks = consecutiveDegradedChecks,
+            consecutiveOkChecks = 0,
         )
     }
 }

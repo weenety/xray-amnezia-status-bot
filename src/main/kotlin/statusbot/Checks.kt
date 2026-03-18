@@ -30,6 +30,9 @@ private const val DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT = 20.0
 private const val DEFAULT_NETWORK_PING_WARN_AVG_MS = 250.0
 private const val DEFAULT_XRAY_RESTART_WARN_COUNT = 3
 private const val DEFAULT_CPU_SAMPLE_WINDOW_MILLIS = 1_000L
+private const val DEFAULT_CPU_WARN_PERCENT_FACTOR = 0.9
+private const val DEFAULT_RAM_WARN_PERCENT_FACTOR = 0.95
+private const val DEFAULT_DISK_WARN_PERCENT_FACTOR = 0.95
 private val SPLIT_WHITESPACE_REGEX = Regex("\\s+")
 private val PING_LOSS_REGEX = Regex("""([\d.]+)%\s+packet loss""")
 private val PING_AVG_REGEX = Regex("""=\s*[\d.]+/([\d.]+)/[\d.]+/[\d.]+""")
@@ -41,14 +44,14 @@ private val SHARED_HTTP_CLIENT: HttpClient = HttpClient.newBuilder()
 private val RESOLVED_PING_PATH: String? by lazy { resolvePingBinary() }
 
 object ThresholdEvaluator {
-    fun classify(valuePercent: Double, criticalPercent: Double): HealthLevel {
+    fun classify(valuePercent: Double, warningPercent: Double, criticalPercent: Double): HealthLevel {
         if (valuePercent < 0) {
             return HealthLevel.WARN
         }
         if (valuePercent >= criticalPercent) {
             return HealthLevel.CRIT
         }
-        if (valuePercent >= criticalPercent * 0.9) {
+        if (valuePercent >= warningPercent) {
             return HealthLevel.WARN
         }
         return HealthLevel.OK
@@ -63,10 +66,12 @@ data class PingProbeResult(
 
 data class NetworkProbeData(
     val dnsOk: Boolean,
+    val dnsError: String?,
     val httpOk: Int,
     val httpTotal: Int,
     val httpFailures: List<String>,
     val tcpOk: Boolean,
+    val tcpError: String?,
     val ping: PingProbeResult,
     val gateway: String?,
     val defaultIface: String?,
@@ -98,8 +103,9 @@ class NetworkHealthChecker {
         val (probe, errors, warnings) = collectProbeData()
         latestTraffic = probe.defaultIface
             ?.let { iface -> probe.ifaceStats?.let { stats -> toTrafficSnapshot(iface, stats) } }
+        evaluateCoreConnectivity(probe, errors, warnings)
         evaluateHttp(probe.httpOk, probe.httpFailures, errors, warnings)
-        evaluatePing(probe.ping, errors, warnings)
+        evaluatePing(probe.ping, warnings)
         val level = resolveLevel(errors, warnings)
         val summary = buildSummary(probe)
         val details = buildDetails(probe, warnings, errors)
@@ -112,19 +118,21 @@ class NetworkHealthChecker {
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
 
-        val dnsOk = checkDns(errors)
+        val dnsError = checkDns()
         val (httpOk, httpTotal, httpFailures) = checkHttp()
-        val tcpOk = checkTcp(errors)
+        val tcpError = checkTcp()
         val ping = checkPing()
         val (gateway, defaultIface) = defaultRoute()
         val ifaceStats = if (defaultIface != null) readInterfaceStats(defaultIface) else null
 
         val probe = NetworkProbeData(
-            dnsOk = dnsOk,
+            dnsOk = dnsError == null,
+            dnsError = dnsError,
             httpOk = httpOk,
             httpTotal = httpTotal,
             httpFailures = httpFailures,
-            tcpOk = tcpOk,
+            tcpOk = tcpError == null,
+            tcpError = tcpError,
             ping = ping,
             gateway = gateway,
             defaultIface = defaultIface,
@@ -147,9 +155,21 @@ class NetworkHealthChecker {
         warnings += httpFailures
     }
 
+    private fun evaluateCoreConnectivity(
+        probe: NetworkProbeData,
+        errors: MutableList<String>,
+        warnings: MutableList<String>,
+    ) {
+        val hardFailures = listOfNotNull(probe.dnsError, probe.tcpError)
+        if (hardFailures.size >= 2) {
+            errors += hardFailures
+            return
+        }
+        warnings += hardFailures
+    }
+
     private fun evaluatePing(
         ping: PingProbeResult,
-        errors: MutableList<String>,
         warnings: MutableList<String>,
     ) {
         if (ping.error != null) {
@@ -159,7 +179,7 @@ class NetworkHealthChecker {
 
         ping.lossPercent?.let { loss ->
             when {
-                loss >= DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT -> errors += "ping loss ${formatDouble(loss)}%"
+                loss >= DEFAULT_NETWORK_PING_CRIT_LOSS_PERCENT -> warnings += "ping loss ${formatDouble(loss)}%"
                 loss >= DEFAULT_NETWORK_PING_WARN_LOSS_PERCENT -> warnings += "ping loss ${formatDouble(loss)}%"
             }
         }
@@ -219,13 +239,12 @@ class NetworkHealthChecker {
         return detailsParts.joinToString(", ")
     }
 
-    private fun checkDns(errors: MutableList<String>): Boolean {
+    private fun checkDns(): String? {
         return try {
             InetAddress.getAllByName(DEFAULT_NETWORK_DNS_HOST)
-            true
+            null
         } catch (ex: Exception) {
-            errors += "dns($DEFAULT_NETWORK_DNS_HOST): ${ex.message ?: ex::class.simpleName}"
-            false
+            "dns($DEFAULT_NETWORK_DNS_HOST): ${ex.message ?: ex::class.simpleName}"
         }
     }
 
@@ -255,7 +274,7 @@ class NetworkHealthChecker {
         return Triple(ok, DEFAULT_NETWORK_URLS.size, failures)
     }
 
-    private fun checkTcp(errors: MutableList<String>): Boolean {
+    private fun checkTcp(): String? {
         return try {
             Socket().use { socket ->
                 socket.connect(
@@ -263,10 +282,9 @@ class NetworkHealthChecker {
                     DEFAULT_NETWORK_HTTP_TIMEOUT_SECONDS * 1000,
                 )
             }
-            true
+            null
         } catch (ex: Exception) {
-            errors += "tcp($DEFAULT_NETWORK_TCP_HOST:$DEFAULT_NETWORK_TCP_PORT): ${ex.message ?: ex::class.simpleName}"
-            false
+            "tcp($DEFAULT_NETWORK_TCP_HOST:$DEFAULT_NETWORK_TCP_PORT): ${ex.message ?: ex::class.simpleName}"
         }
     }
 
@@ -558,9 +576,21 @@ class SystemHealthChecker(private val settings: Settings) {
         val ram = ramPercent()
         val disk = rootDiskPercent()
 
-        val cpuLevel = ThresholdEvaluator.classify(cpu, settings.thresholdCpuPercent)
-        val ramLevel = ThresholdEvaluator.classify(ram, settings.thresholdRamPercent)
-        val diskLevel = ThresholdEvaluator.classify(disk, settings.thresholdDiskPercent)
+        val cpuLevel = ThresholdEvaluator.classify(
+            cpu,
+            settings.thresholdCpuPercent * DEFAULT_CPU_WARN_PERCENT_FACTOR,
+            settings.thresholdCpuPercent,
+        )
+        val ramLevel = ThresholdEvaluator.classify(
+            ram,
+            settings.thresholdRamPercent * DEFAULT_RAM_WARN_PERCENT_FACTOR,
+            settings.thresholdRamPercent,
+        )
+        val diskLevel = ThresholdEvaluator.classify(
+            disk,
+            settings.thresholdDiskPercent * DEFAULT_DISK_WARN_PERCENT_FACTOR,
+            settings.thresholdDiskPercent,
+        )
 
         return listOf(
             CheckResult(
